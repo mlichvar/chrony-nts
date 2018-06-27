@@ -27,6 +27,34 @@
 #ifndef GOT_NTS_KE_H
 #define GOT_NTS_KE_H
 
+#include "addressing.h"
+
+typedef struct NKE_Instance_Record *NKE_Instance;
+
+#define NKE_MAX_KEY_LENGTH 32
+#define NKE_MAX_COOKIE_LENGTH 256
+
+typedef struct {
+  int length;
+  char key[NKE_MAX_KEY_LENGTH];
+} NKE_Key;
+
+typedef struct {
+  int length;
+  unsigned char cookie[NKE_MAX_COOKIE_LENGTH];
+} NKE_Cookie;
+
+extern void NKE_Initialise(void);
+extern void NKE_Finalise(void);
+
+extern NKE_Instance NKE_CreateInstance(void);
+extern int NKE_OpenClientConnection(NKE_Instance inst, IPAddr *addr, int port,
+                                    const char *name);
+extern int NKE_GetKeysAndCookies(NKE_Instance inst, NKE_Key *c2s, NKE_Key *s2c,
+                                 NKE_Cookie *cookies, int max_cookies);
+extern void NKE_Disconnect(NKE_Instance inst);
+extern void NKE_DestroyInstance(NKE_Instance inst);
+
 extern void NKE_test(void);
 
 #endif
