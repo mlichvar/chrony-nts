@@ -42,7 +42,29 @@
 #define EXPORTER_CONTEXT_C2S "\x0\x0\x0\xf\x0"
 #define EXPORTER_CONTEXT_S2C "\x0\x0\x0\xf\x1"
 
+#define RECORD_CRITICAL_BIT (1U << 15)
+#define RECORD_END_OF_MESSAGE 0
+#define RECORD_NEXT_PROTOCOL 1
+#define RECORD_ERROR 2
+#define RECORD_WARNING 3
+#define RECORD_AEAD_ALGORITHM 4
+#define RECORD_COOKIE 5
+#define RECORD_NTPV4_SERVER_NEGOTIATION 6
+#define RECORD_NTPV4_PORT_NEGOTIATION 7
+
+#define ERROR_BAD_RESPONSE -2
+#define ERROR_NONE -1
+#define ERROR_UNRECOGNIZED_CRITICAL_RECORD 0
+#define ERROR_BAD_REQUEST 1
+
+#define NEXT_PROTOCOL_NONE -1
+#define NEXT_PROTOCOL_NTPV4 0
+#define AEAD_NONE -1
+#define AEAD_AES_SIV_CMAC_256 15
+
 #define MAX_MESSAGE_LENGTH 16384
+#define MAX_RECORD_BODY_LENGTH 256
+#define MAX_COOKIES 8
 
 #define INVALID_SOCK_FD -4
 
@@ -314,30 +336,139 @@ reset_message(struct NKE_Message *message)
   message->parsed = 0;
 }
 
+static int
+add_record(struct NKE_Message *message, int critical, int type, void *body, int body_length)
+{
+  struct RecordHeader header;
+
+  if (body_length < 0 || body_length > 0xffff ||
+      message->length + sizeof (header) + body_length > sizeof (message->data))
+    return 0;
+
+  header.type = htons(!!critical * RECORD_CRITICAL_BIT | type);
+  header.body_length = htons(body_length);
+
+  memcpy(&message->data[message->length], &header, sizeof (header));
+  message->length += sizeof (header);
+
+  if (body_length > 0) {
+    memcpy(&message->data[message->length], body, body_length);
+    message->length += body_length;
+  }
+
+  return 1;
+}
+
+static void
+reset_message_parsing(struct NKE_Message *message)
+{
+  message->parsed = 0;
+}
+
+static int
+get_record(struct NKE_Message *message, int *critical, int *type, void *body, int *body_length)
+{
+  struct RecordHeader header;
+  int blen, rlen;
+
+  if (message->length < message->parsed + sizeof (header))
+    return 0;
+
+  memcpy(&header, &message->data[message->parsed], sizeof (header));
+
+  blen = ntohs(header.body_length);
+  rlen = sizeof (header) + blen;
+
+  if (message->length < message->parsed + rlen)
+    return 0;
+
+  if (critical)
+    *critical = !!(ntohs(header.type) & 0x8000);
+  if (type)
+    *type = ntohs(header.type) & 0x7fff;
+  if (body)
+    memcpy(body, &message->data[message->parsed + sizeof (header)], MIN(*body_length, blen));
+  if (body_length)
+    *body_length = blen;
+
+  message->parsed += rlen;
+
+  return 1;
+}
+
 static NtsKeMsgFormat
 check_message_format(struct NKE_Message *message)
 {
+  int critical, type, length;
+
+  reset_message_parsing(message);
+
+  while (get_record(message, &critical, &type, NULL, &length))
+    ;
+
+  if (message->length == 0 || message->parsed < message->length)
+    return message->eof ? MSG_ERROR : MSG_INCOMPLETE;
+
+  if (!critical || type != RECORD_END_OF_MESSAGE || length != 0)
+    return MSG_ERROR;
+
   return MSG_OK;
 }
 
 static int
 prepare_request(NKE_Instance inst)
 {
+  uint16_t datum;
+
   reset_message(&inst->message);
 
-  memset(inst->message.data, 0, sizeof (inst->message.data));
-  inst->message.length = sizeof (inst->message.data);
+  datum = htons(NEXT_PROTOCOL_NTPV4);
+  if (!add_record(&inst->message, 1, RECORD_NEXT_PROTOCOL, &datum, sizeof (datum)))
+    return 0;
+
+  datum = htons(AEAD_AES_SIV_CMAC_256);
+  if (!add_record(&inst->message, 1, RECORD_AEAD_ALGORITHM, &datum, sizeof (datum)))
+    return 0;
+
+  if (!add_record(&inst->message, 1, RECORD_END_OF_MESSAGE, NULL, 0))
+    return 0;
 
   return 1;
 }
 
 static int
-prepare_response(NKE_Instance inst)
+prepare_response(NKE_Instance inst, int error, int next_protocol, int aead_algorithm)
 {
+  uint16_t datum;
+  int i;
+
+  DEBUG_LOG("NTS KE response: error=%d next=%d aead=%d", error, next_protocol, aead_algorithm);
+
   reset_message(&inst->message);
 
-  memset(inst->message.data, 0, sizeof (inst->message.data));
-  inst->message.length = sizeof (inst->message.data);
+  if (error != ERROR_NONE) {
+    datum = htons(error);
+    if (!add_record(&inst->message, 1, RECORD_ERROR, &datum, sizeof (datum)))
+      return 0;
+  } else {
+    datum = htons(next_protocol);
+    if (!add_record(&inst->message, 1, RECORD_NEXT_PROTOCOL, &datum, sizeof (datum)))
+      return 0;
+
+    datum = htons(aead_algorithm);
+    if (!add_record(&inst->message, 1, RECORD_AEAD_ALGORITHM, &datum, sizeof (datum)))
+      return 0;
+
+    /* TODO: make real cookies */
+    for (i = 0; i < MAX_COOKIES; i++) {
+      datum = htons(0xff);
+      if (!add_record(&inst->message, 0, RECORD_COOKIE, &datum, sizeof (datum)))
+        return 0;
+    }
+  }
+
+  if (!add_record(&inst->message, 1, RECORD_END_OF_MESSAGE, NULL, 0))
+    return 0;
 
   return 1;
 }
@@ -345,7 +476,56 @@ prepare_response(NKE_Instance inst)
 static int
 process_request(NKE_Instance inst)
 {
-  prepare_response(inst);
+  int next_protocol = NEXT_PROTOCOL_NONE, aead_algorithm = AEAD_NONE, error = ERROR_NONE;
+  int has_next_protocol = 0, i, critical, type, length;
+  uint16_t data[MAX_RECORD_BODY_LENGTH / 2];
+
+  reset_message_parsing(&inst->message);
+
+  while (error == ERROR_NONE) {
+    length = sizeof (data);
+    if (!get_record(&inst->message, &critical, &type, &data, &length))
+      break;
+
+    switch (type) {
+      case RECORD_NEXT_PROTOCOL:
+        if (!critical || length < 2 || length % 2 != 0) {
+          error = ERROR_BAD_REQUEST;
+          break;
+        }
+        for (i = 0; i < MIN(length, sizeof (data)) / 2; i++) {
+          if (ntohs(data[i]) == NEXT_PROTOCOL_NTPV4)
+            next_protocol = NEXT_PROTOCOL_NTPV4;
+        }
+        has_next_protocol = 1;
+        break;
+      case RECORD_AEAD_ALGORITHM:
+        if (length < 2 || length % 2 != 0) {
+          error = ERROR_BAD_REQUEST;
+          break;
+        }
+        for (i = 0; i < MIN(length, sizeof (data)) / 2; i++) {
+          if (ntohs(data[i]) == AEAD_AES_SIV_CMAC_256)
+            aead_algorithm = AEAD_AES_SIV_CMAC_256;
+        }
+        break;
+      case RECORD_ERROR:
+      case RECORD_WARNING:
+      case RECORD_COOKIE:
+        error = ERROR_BAD_REQUEST;
+        break;
+      case RECORD_END_OF_MESSAGE:
+        break;
+      default:
+        if (critical)
+          error = ERROR_UNRECOGNIZED_CRITICAL_RECORD;
+    }
+  }
+
+  if (!has_next_protocol)
+    error = ERROR_BAD_REQUEST;
+
+  prepare_response(inst, error, next_protocol, aead_algorithm);
 
   return 1;
 }
@@ -353,6 +533,66 @@ process_request(NKE_Instance inst)
 static int
 process_response(NKE_Instance inst)
 {
+  int next_protocol = NEXT_PROTOCOL_NONE, aead_algorithm = AEAD_NONE, error = ERROR_NONE;
+  int cookies = 0, critical, type, length;
+  uint16_t data[1];
+
+  reset_message_parsing(&inst->message);
+
+  while (error == ERROR_NONE) {
+    length = sizeof (data);
+    if (!get_record(&inst->message, &critical, &type, &data, &length))
+      break;
+
+    switch (type) {
+      case RECORD_NEXT_PROTOCOL:
+        if (!critical || length != 2 || ntohs(data[0]) != NEXT_PROTOCOL_NTPV4) {
+          DEBUG_LOG("Unexpected NTS KE next protocol");
+          error = ERROR_BAD_RESPONSE;
+          break;
+        }
+        next_protocol = NEXT_PROTOCOL_NTPV4;
+        break;
+      case RECORD_AEAD_ALGORITHM:
+        if (length != 2 || ntohs(data[0]) != AEAD_AES_SIV_CMAC_256) {
+          DEBUG_LOG("Unexpected NTS KE AEAD algorithm");
+          error = ERROR_BAD_RESPONSE;
+        }
+        aead_algorithm = AEAD_AES_SIV_CMAC_256;
+        break;
+      case RECORD_ERROR:
+        if (length == 2)
+          DEBUG_LOG("NTS KE error %d", ntohs(data[0]));
+        error = ERROR_BAD_RESPONSE;
+        break;
+      case RECORD_WARNING:
+        if (length == 2)
+          DEBUG_LOG("NTS KE warning %d", ntohs(data[0]));
+        error = ERROR_BAD_RESPONSE;
+        break;
+      case RECORD_COOKIE:
+        DEBUG_LOG("NTS KE cookie length=%d", length);
+        cookies++;
+        break;
+      case RECORD_END_OF_MESSAGE:
+        break;
+      case RECORD_NTPV4_SERVER_NEGOTIATION:
+      case RECORD_NTPV4_PORT_NEGOTIATION:
+        /* TODO */
+      default:
+        if (critical)
+          error = 1;
+    }
+  }
+
+  DEBUG_LOG("NTS KE response: error=%d next=%d aead=%d",
+            error, next_protocol, aead_algorithm);
+
+  if (next_protocol != NEXT_PROTOCOL_NTPV4 ||
+      aead_algorithm != AEAD_AES_SIV_CMAC_256 ||
+      error != ERROR_NONE || cookies == 0)
+    ;
+
   return 1;
 }
 
