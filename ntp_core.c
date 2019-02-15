@@ -74,6 +74,16 @@ typedef enum {
 } AuthenticationMode;
 
 /* ================================================== */
+/* Structure used for holding authentication-specific state */
+
+typedef struct {
+  AuthenticationMode mode;      /* Authentication mode of NTP packets */
+  union {
+    uint32_t key_id;            /* Identifier of a symmetric key */
+  };
+} AuthenticationData;
+
+/* ================================================== */
 /* Structure used for holding a single peer/server's
    protocol machine */
 
@@ -137,9 +147,7 @@ struct NCR_Instance_Record {
   double offset_correction;     /* Correction applied to measured offset
                                    (e.g. for asymmetry in network delay) */
 
-  AuthenticationMode auth_mode; /* Authentication mode of our requests */
-  uint32_t auth_key_id;          /* The ID of the authentication key to
-                                   use. */
+  AuthenticationData auth;
 
   /* Count of transmitted packets since last valid response */
   unsigned int tx_count;
@@ -572,26 +580,25 @@ NCR_GetInstance(NTP_Remote_Address *remote_addr, NTP_Source_Type type, SourcePar
 
   result->version = NTP_VERSION;
 
-  if (params->authkey == INACTIVE_AUTHKEY) {
-    result->auth_mode = AUTH_NONE;
-    result->auth_key_id = 0;
-  } else {
-    result->auth_mode = AUTH_SYMMETRIC;
-    result->auth_key_id = params->authkey;
-    if (!KEY_KeyKnown(result->auth_key_id)) {
+  if (params->authkey != INACTIVE_AUTHKEY) {
+    result->auth.mode = AUTH_SYMMETRIC;
+    result->auth.key_id = params->authkey;
+    if (!KEY_KeyKnown(result->auth.key_id)) {
       LOG(LOGS_WARN, "Key %"PRIu32" used by source %s is %s",
-          result->auth_key_id, UTI_IPToString(&result->remote_addr.ip_addr),
+          result->auth.key_id, UTI_IPToString(&result->remote_addr.ip_addr),
           "missing");
-    } else if (!KEY_CheckKeyLength(result->auth_key_id)) {
+    } else if (!KEY_CheckKeyLength(result->auth.key_id)) {
       LOG(LOGS_WARN, "Key %"PRIu32" used by source %s is %s",
-          result->auth_key_id, UTI_IPToString(&result->remote_addr.ip_addr),
+          result->auth.key_id, UTI_IPToString(&result->remote_addr.ip_addr),
           "too short");
     }
 
     /* If the MAC in NTPv4 packets would be truncated, use version 3 by
        default for compatibility with older chronyd servers */
-    if (KEY_GetAuthLength(result->auth_key_id) + 4 > NTP_MAX_V4_MAC_LENGTH)
+    if (KEY_GetAuthLength(result->auth.key_id) + 4 > NTP_MAX_V4_MAC_LENGTH)
       result->version = 3;
+  } else {
+    result->auth.mode = AUTH_NONE;
   }
 
   if (params->version)
@@ -928,8 +935,7 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
                 int interleaved, /* Flag enabling interleaved mode */
                 int my_poll, /* The log2 of the local poll interval */
                 int version, /* The NTP version to be set in the packet */
-                int auth_mode, /* The authentication mode */
-                uint32_t key_id, /* The authentication key ID */
+                AuthenticationData *auth, /* The authentication data */
                 NTP_int64 *remote_ntp_rx, /* The receive timestamp from received packet */
                 NTP_int64 *remote_ntp_tx, /* The transmit timestamp from received packet */
                 NTP_Local_Timestamp *local_rx, /* The RX time of the received packet */
@@ -1072,33 +1078,33 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
 
     /* Authenticate the packet */
 
-    if (auth_mode == AUTH_SYMMETRIC || auth_mode == AUTH_MSSNTP) {
+    if (auth->mode == AUTH_SYMMETRIC || auth->mode == AUTH_MSSNTP) {
       /* Pre-compensate the transmit time by approximately how long it will
          take to generate the authentication data */
-      local_transmit.tv_nsec += auth_mode == AUTH_SYMMETRIC ?
-                                KEY_GetAuthDelay(key_id) : NSD_GetAuthDelay(key_id);
+      local_transmit.tv_nsec += auth->mode == AUTH_SYMMETRIC ?
+                                KEY_GetAuthDelay(auth->key_id) : NSD_GetAuthDelay(auth->key_id);
       UTI_NormaliseTimespec(&local_transmit);
       UTI_TimespecToNtp64(interleaved ? &local_tx->ts : &local_transmit,
                           &message.transmit_ts, &ts_fuzz);
 
-      if (auth_mode == AUTH_SYMMETRIC) {
+      if (auth->mode == AUTH_SYMMETRIC) {
         /* Truncate long MACs in NTPv4 packets to allow deterministic parsing
            of extension fields (RFC 7822) */
         max_auth_len = (version == 4 ?
                         NTP_MAX_V4_MAC_LENGTH : (sizeof (message) - length)) - 4;
 
-        auth_len = KEY_GenerateAuth(key_id, (unsigned char *)&message, length,
+        auth_len = KEY_GenerateAuth(auth->key_id, (unsigned char *)&message, length,
                                     (unsigned char *)&message + length + 4, max_auth_len);
         if (!auth_len) {
-          DEBUG_LOG("Could not generate auth data with key %"PRIu32, key_id);
+          DEBUG_LOG("Could not generate auth data with key %"PRIu32, auth->key_id);
           return 0;
         }
 
-        *(uint32_t *)((unsigned char *)&message + length) = htonl(key_id);
+        *(uint32_t *)((unsigned char *)&message + length) = htonl(auth->key_id);
         length += 4 + auth_len;
-      } else if (auth_mode == AUTH_MSSNTP) {
+      } else if (auth->mode == AUTH_MSSNTP) {
         /* MS-SNTP packets are signed (asynchronously) by ntp_signd */
-        return NSD_SignAndSendPacket(key_id, &message, where_to, from, length);
+        return NSD_SignAndSendPacket(auth->key_id, &message, where_to, from, length);
       }
     } else {
       UTI_TimespecToNtp64(interleaved ? &local_tx->ts : &local_transmit,
@@ -1225,7 +1231,7 @@ transmit_timeout(void *arg)
 
   /* Send the request (which may also be a response in the symmetric mode) */
   sent = transmit_packet(inst->mode, interleaved, inst->local_poll, inst->version,
-                         inst->auth_mode, inst->auth_key_id,
+                         &inst->auth,
                          initial ? NULL : &inst->remote_ntp_rx,
                          initial ? &inst->init_remote_ntp_tx : &inst->remote_ntp_tx,
                          initial ? &inst->init_local_rx : &inst->local_rx,
@@ -1584,9 +1590,9 @@ receive_packet(NCR_Instance inst, NTP_Local_Address *local_addr,
      is bad, or it's authenticated with a different key than expected, it's got
      to fail.  If we don't expect the packet to be authenticated, just ignore
      the test. */
-  test5 = inst->auth_mode == AUTH_NONE ||
+  test5 = inst->auth.mode == AUTH_NONE ||
           (check_packet_auth(message, length, &pkt_auth_mode, &pkt_key_id) &&
-           pkt_auth_mode == inst->auth_mode && pkt_key_id == inst->auth_key_id);
+           pkt_auth_mode == inst->auth.mode && pkt_key_id == inst->auth.key_id);
 
   /* Test 6 checks for unsynchronised server */
   test6 = pkt_leap != LEAP_Unsynchronised &&
@@ -1906,7 +1912,7 @@ receive_packet(NCR_Instance inst, NTP_Local_Address *local_addr,
                                test5) << 1 | test6) << 1 | test7) << 1 |
                             testA) << 1 | testB) << 1 | testC) << 1 | testD;
     inst->report.interleaved = interleaved_packet;
-    inst->report.authenticated = inst->auth_mode != AUTH_NONE;
+    inst->report.authenticated = inst->auth.mode != AUTH_NONE;
     inst->report.tx_tss_char = tss_chars[local_transmit.source];
     inst->report.rx_tss_char = tss_chars[local_receive.source];
 
@@ -2089,8 +2095,7 @@ NCR_ProcessRxUnknown(NTP_Remote_Address *remote_addr, NTP_Local_Address *local_a
   NTP_int64 *local_ntp_rx, *local_ntp_tx;
   NTP_Local_Timestamp local_tx, *tx_ts;
   int pkt_version, valid_auth, log_index, interleaved, poll;
-  AuthenticationMode auth_mode;
-  uint32_t key_id;
+  AuthenticationData auth;
 
   /* Ignore the packet if it wasn't received by server socket */
   if (!NIO_IsServerSocket(local_addr->sock_fd)) {
@@ -2144,11 +2149,11 @@ NCR_ProcessRxUnknown(NTP_Remote_Address *remote_addr, NTP_Local_Address *local_a
   }
 
   /* Check if the packet includes MAC that authenticates properly */
-  valid_auth = check_packet_auth(message, length, &auth_mode, &key_id);
+  valid_auth = check_packet_auth(message, length, &auth.mode, &auth.key_id);
 
   /* If authentication failed, select whether and how we should respond */
   if (!valid_auth) {
-    switch (auth_mode) {
+    switch (auth.mode) {
       case AUTH_NONE:
         /* Reply with no MAC */
         break;
@@ -2157,7 +2162,7 @@ NCR_ProcessRxUnknown(NTP_Remote_Address *remote_addr, NTP_Local_Address *local_a
         break;
       default:
         /* Discard packets in other modes */
-        DEBUG_LOG("NTP packet discarded auth_mode=%u", auth_mode);
+        DEBUG_LOG("NTP packet discarded auth mode=%u", auth.mode);
         return;
     }
   }
@@ -2193,7 +2198,7 @@ NCR_ProcessRxUnknown(NTP_Remote_Address *remote_addr, NTP_Local_Address *local_a
 
   /* Send a reply */
   transmit_packet(my_mode, interleaved, poll, pkt_version,
-                  auth_mode, key_id, &message->receive_ts, &message->transmit_ts,
+                  &auth, &message->receive_ts, &message->transmit_ts,
                   rx_ts, tx_ts, local_ntp_rx, NULL, remote_addr, local_addr);
 
   /* Save the transmit timestamp */
@@ -2621,6 +2626,7 @@ static void
 broadcast_timeout(void *arg)
 {
   BroadcastDestination *destination;
+  AuthenticationData auth;
   NTP_int64 orig_ts;
   NTP_Local_Timestamp recv_ts;
   int poll;
@@ -2631,7 +2637,9 @@ broadcast_timeout(void *arg)
   UTI_ZeroNtp64(&orig_ts);
   zero_local_timestamp(&recv_ts);
 
-  transmit_packet(MODE_BROADCAST, 0, poll, NTP_VERSION, 0, 0, &orig_ts, &orig_ts, &recv_ts,
+  auth.mode = AUTH_NONE;
+
+  transmit_packet(MODE_BROADCAST, 0, poll, NTP_VERSION, &auth, &orig_ts, &orig_ts, &recv_ts,
                   NULL, NULL, NULL, &destination->addr, &destination->local_addr);
 
   /* Requeue timeout.  We don't care if interval drifts gradually. */
