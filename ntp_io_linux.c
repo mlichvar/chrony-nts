@@ -824,7 +824,7 @@ NIO_Linux_ProcessMessage(NTP_Remote_Address *remote_addr, NTP_Local_Address *loc
     return 1;
   }
 
-  if (length < NTP_NORMAL_PACKET_LENGTH)
+  if (length < NTP_HEADER_LENGTH)
     return 1;
 
   NSR_ProcessTx(remote_addr, local_addr, local_ts,

@@ -59,7 +59,7 @@ union sockaddr_in46 {
 struct Message {
   union sockaddr_in46 name;
   struct iovec iov;
-  NTP_Receive_Buffer buf;
+  NTP_Packet buf;
   /* Aligned buffer for control messages */
   struct cmsghdr cmsgbuf[CMSGBUF_SIZE / sizeof (struct cmsghdr)];
 };
@@ -704,7 +704,7 @@ process_message(struct msghdr *hdr, int length, int sock_fd)
             local_ts.source, UTI_DiffTimespecsToDouble(&sched_ts, &local_ts.ts));
 
   /* Just ignore the packet if it's not of a recognized length */
-  if (length < NTP_NORMAL_PACKET_LENGTH || length > sizeof (NTP_Receive_Buffer))
+  if (length < NTP_HEADER_LENGTH || length > sizeof (NTP_Packet))
     return;
 
   NSR_ProcessRx(&remote_addr, &local_addr, &local_ts,
