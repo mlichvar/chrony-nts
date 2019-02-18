@@ -262,6 +262,8 @@ process_response(NCR_Instance inst, int good, int valid, int updated_sync, int u
   else if (!good)
     TEST_CHECK(!ret);
 
+  /* TODO: following tests fail due to new early check of format */
+
   if (prev_open_socket)
     TEST_CHECK(prev_rx_count + 1 == inst->report.total_rx_count);
   else
