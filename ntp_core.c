@@ -34,6 +34,7 @@
 #include "ntp_ext.h"
 #include "ntp_io.h"
 #include "ntp_signd.h"
+#include "nts_ntp.h"
 #include "memory.h"
 #include "sched.h"
 #include "reference.h"
@@ -71,6 +72,7 @@ typedef struct {
   NTP_AuthMode mode;            /* Authentication mode of NTP packets */
   union {
     uint32_t key_id;            /* Identifier of a symmetric key */
+    NTS_ClientInstance nts;     /* NTS client */
   };
 } AuthenticationData;
 
@@ -572,7 +574,10 @@ NCR_GetInstance(NTP_Remote_Address *remote_addr, NTP_Source_Type type, SourcePar
 
   result->version = NTP_VERSION;
 
-  if (params->authkey != INACTIVE_AUTHKEY) {
+  if (params->nts) {
+    result->auth.mode = AUTH_NTS;
+    result->auth.nts = NTS_CreateClientInstance();
+  } else if (params->authkey != INACTIVE_AUTHKEY) {
     result->auth.mode = AUTH_SYMMETRIC;
     result->auth.key_id = params->authkey;
     if (!KEY_KeyKnown(result->auth.key_id)) {
@@ -650,6 +655,9 @@ NCR_DestroyInstance(NCR_Instance instance)
      structure, which will cause reselection if this was the
      synchronising source etc. */
   SRC_DestroyInstance(instance->source);
+
+  if (instance->auth.mode == AUTH_NTS)
+    NTS_DestroyClientInstance(instance->auth.nts);
 
   /* Free the data structure */
   Free(instance);
@@ -980,6 +988,11 @@ check_request_auth(NTP_Packet *packet, NTP_PacketInfo *info,
     case AUTH_MSSNTP:
       /* MS-SNTP servers don't check client MAC */
       break;
+    case AUTH_NTS:
+      if (!NTS_CheckRequestAuth(packet, info))
+        return 0;
+      validated->nts = NULL;
+      break;
     default:
       return 0;
   }
@@ -1009,6 +1022,10 @@ check_response_auth(NTP_Packet *packet, NTP_PacketInfo *info,
       if (!check_symmetric_auth(packet, info))
         return 0;
       break;
+    case AUTH_NTS:
+      if (!NTS_CheckResponseAuth(expected->nts, packet, info))
+        return 0;
+      break;
     default:
       return 0;
   }
@@ -1034,7 +1051,9 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
                 NTP_int64 *local_ntp_tx, /* The transmit timestamp from the previous packet
                                             RESULT : transmit timestamp from this packet */
                 NTP_Remote_Address *where_to, /* Where to address the reponse to */
-                NTP_Local_Address *from /* From what address to send it */
+                NTP_Local_Address *from,      /* From what address to send it */
+                NTP_Packet *request,          /* The received packet if responding */
+                NTP_PacketInfo *request_info  /* and its info */
                 )
 {
   NTP_PacketInfo info;
@@ -1184,6 +1203,16 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
         /* MS-SNTP packets are signed (asynchronously) by ntp_signd */
         return NSD_SignAndSendPacket(auth->key_id, &message, where_to, from, info.length);
       }
+    } else if (auth->mode == AUTH_NTS) {
+      UTI_TimespecToNtp64(interleaved ? &local_tx->ts : &local_transmit,
+                          &message.transmit_ts, &ts_fuzz);
+      if (auth->nts) {
+        if (!NTS_GenerateRequestAuth(auth->nts, &message, &info))
+          return 0;
+      } else {
+        if (!NTS_GenerateResponseAuth(request, request_info, &message, &info))
+          return 0;
+      }
     } else {
       UTI_TimespecToNtp64(interleaved ? &local_tx->ts : &local_transmit,
                           &message.transmit_ts, &ts_fuzz);
@@ -1314,7 +1343,7 @@ transmit_timeout(void *arg)
                          initial ? &inst->init_remote_ntp_tx : &inst->remote_ntp_tx,
                          initial ? &inst->init_local_rx : &inst->local_rx,
                          &inst->local_tx, &inst->local_ntp_rx, &inst->local_ntp_tx,
-                         &inst->remote_addr, &local_addr);
+                         &inst->remote_addr, &local_addr, NULL, NULL);
 
   ++inst->tx_count;
   if (sent)
@@ -1454,6 +1483,13 @@ parse_packet(NTP_Packet *packet, int length, NTP_PacketInfo *info)
     }
 
     switch (ef_type) {
+      case NTP_EF_NTS_UNIQUE_IDENTIFIER:
+      case NTP_EF_NTS_COOKIE:
+      case NTP_EF_NTS_COOKIE_PLACEHOLDER:
+        break;
+      case NTP_EF_NTS_AUTH_AND_EEF:
+        info->auth.mode = AUTH_NTS;
+        break;
       default:
         DEBUG_LOG("Unknown extension field type=%x", (unsigned int)ef_type);
     }
@@ -2265,7 +2301,8 @@ NCR_ProcessRxUnknown(NTP_Remote_Address *remote_addr, NTP_Local_Address *local_a
   /* Send a reply */
   transmit_packet(my_mode, interleaved, poll, version,
                   &auth, &message->receive_ts, &message->transmit_ts,
-                  rx_ts, tx_ts, local_ntp_rx, NULL, remote_addr, local_addr);
+                  rx_ts, tx_ts, local_ntp_rx, NULL,
+                  remote_addr, local_addr, message, &info);
 
   /* Save the transmit timestamp */
   if (tx_ts)
@@ -2705,7 +2742,7 @@ broadcast_timeout(void *arg)
   auth.mode = AUTH_NONE;
 
   transmit_packet(MODE_BROADCAST, 0, poll, NTP_VERSION, &auth, &orig_ts, &orig_ts, &recv_ts,
-                  NULL, NULL, NULL, &destination->addr, &destination->local_addr);
+                  NULL, NULL, NULL, &destination->addr, &destination->local_addr, NULL, NULL);
 
   /* Requeue timeout.  We don't care if interval drifts gradually. */
   SCH_AddTimeoutInClass(destination->interval, get_separation(poll), SAMPLING_RANDOMNESS,

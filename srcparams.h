@@ -52,6 +52,7 @@ typedef struct {
   int filter_length;
   int interleaved;
   int sel_options;
+  int nts;
   uint32_t authkey;
   double max_delay;
   double max_delay_ratio;
