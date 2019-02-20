@@ -38,10 +38,11 @@ struct ExtFieldHeader {
 /* ================================================== */
 
 int
-NEF_AddField(NTP_Packet *packet, int length,
+NEF_AddField(NTP_Packet *packet, NTP_PacketInfo *info,
              int type, void *body, int body_length)
 {
   struct ExtFieldHeader *header;
+  int length = info->length;
 
   if (length < NTP_HEADER_LENGTH || length % 4 != 0 ||
       length + body_length + sizeof (*header) > sizeof (*packet))
@@ -52,9 +53,9 @@ NEF_AddField(NTP_Packet *packet, int length,
   header->length = htons(sizeof (*header) + body_length);
   memcpy(header + 1, body, body_length);
 
-  length += sizeof (*header) + body_length;
+  info->length += sizeof (*header) + body_length;
 
-  return length;
+  return 1;
 }
 
 /* ================================================== */

@@ -29,7 +29,7 @@
 
 #include "ntp.h"
 
-extern int NEF_AddField(NTP_Packet *packet, int length,
+extern int NEF_AddField(NTP_Packet *packet, NTP_PacketInfo *info,
                         int type, void *body, int body_length);
 extern int NEF_ParseField(NTP_Packet *packet, int length, int parsed,
                           int *type, void **body, int *body_length);
