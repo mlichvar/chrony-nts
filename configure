@@ -932,7 +932,7 @@ if [ $feat_nts = "1" ] && [ $try_gnutls = "1" ]; then
     "$test_cflags" "$test_link" \
     'gnutls_init(NULL, 0);'
   then
-    EXTRA_OBJECTS="$EXTRA_OBJECTS nts_ntp.o nts_ke.o"
+    EXTRA_OBJECTS="$EXTRA_OBJECTS nts_ntp.o nts_ke.o siv_cmac.o"
     LIBS="$LIBS $test_link"
     MYCPPFLAGS="$MYCPPFLAGS $test_cflags"
     add_def FEAT_NTS
