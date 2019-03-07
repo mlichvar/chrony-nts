@@ -316,8 +316,6 @@ close_connection(NKE_Instance inst)
 
   //SCH_RemoveTimeout(inst->timeout);
 
-  gnutls_deinit(inst->session);
-
   if (inst->sock_fd != INVALID_SOCK_FD) {
     SCH_RemoveFileHandler(inst->sock_fd);
     close(inst->sock_fd);
@@ -531,11 +529,11 @@ process_request(NKE_Instance inst)
 }
 
 static int
-process_response(NKE_Instance inst)
+process_response(NKE_Instance inst, NKE_Cookie *cookies, int max_cookies)
 {
   int next_protocol = NEXT_PROTOCOL_NONE, aead_algorithm = AEAD_NONE, error = ERROR_NONE;
-  int cookies = 0, critical, type, length;
-  uint16_t data[1];
+  int num_cookies = 0, critical, type, length;
+  uint16_t data[NKE_MAX_COOKIE_LENGTH / sizeof (uint16_t)];
 
   reset_message_parsing(&inst->message);
 
@@ -572,7 +570,12 @@ process_response(NKE_Instance inst)
         break;
       case RECORD_COOKIE:
         DEBUG_LOG("NTS KE cookie length=%d", length);
-        cookies++;
+        assert(NKE_MAX_COOKIE_LENGTH == sizeof (cookies[num_cookies].cookie));
+        if (length <= NKE_MAX_COOKIE_LENGTH && num_cookies < max_cookies) {
+          cookies[num_cookies].length = length;
+          memcpy(cookies[num_cookies].cookie, data, length);
+          num_cookies++;
+        }
         break;
       case RECORD_END_OF_MESSAGE:
         break;
@@ -590,10 +593,10 @@ process_response(NKE_Instance inst)
 
   if (next_protocol != NEXT_PROTOCOL_NTPV4 ||
       aead_algorithm != AEAD_AES_SIV_CMAC_256 ||
-      error != ERROR_NONE || cookies == 0)
-    ;
+      error != ERROR_NONE)
+    return 0;
 
-  return 1;
+  return num_cookies;
 }
 
 static void
@@ -674,10 +677,7 @@ update_state(NKE_Instance inst)
               /* Wait for more data */
               return;
             case MSG_OK:
-              /* TODO: Should this be in NKE_GetCookies() ? */
-              if (process_response(inst))
-                break;
-              /* Fall through */
+              break;
             default:
               close_connection(inst);
               return;
@@ -913,8 +913,16 @@ NKE_OpenClientConnection(NKE_Instance inst, IPAddr *addr, int port, const char *
 }
 
 int
-NKE_GetKeysAndCookies(NKE_Instance inst, NKE_Key *c2s, NKE_Key *s2c,
-                      NKE_Cookie *cookies, int max_cookies)
+NKE_GetCookies(NKE_Instance inst, NKE_Cookie *cookies, int max_cookies)
+{
+  if (inst->mode != KE_CLIENT && inst->state != KE_CLOSED)
+    return 0;
+
+  return process_response(inst, cookies, max_cookies);
+}
+
+int
+NKE_GetKeys(NKE_Instance inst, NKE_Key *c2s, NKE_Key *s2c)
 {
   if (gnutls_prf_rfc5705(inst->session, sizeof (EXPORTER_LABEL) - 1, EXPORTER_LABEL,
                          sizeof (EXPORTER_CONTEXT_C2S) - 1, EXPORTER_CONTEXT_C2S,
@@ -928,7 +936,7 @@ NKE_GetKeysAndCookies(NKE_Instance inst, NKE_Key *c2s, NKE_Key *s2c,
   c2s->length = sizeof (c2s->key);
   s2c->length = sizeof (s2c->key);
 
-  return 0;
+  return 1;
 }
 
 void NKE_Disconnect(NKE_Instance inst)
@@ -940,6 +948,9 @@ void
 NKE_DestroyInstance(NKE_Instance inst)
 {
   close_connection(inst);
+
+  if (inst->mode != KE_UNKNOWN)
+    gnutls_deinit(inst->session);
 
   Free(inst);
 }
