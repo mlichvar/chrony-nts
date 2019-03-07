@@ -1087,7 +1087,11 @@ process_cmd_add_server_or_peer(CMD_Request *msg, char *line)
         break;
       }
 
-      opt_name = NULL;
+      if (data.params.nts)
+        opt_name = "nts";
+      else
+        opt_name = NULL;
+
       if (opt_name) {
         LOG(LOGS_ERR, "%s can't be set in chronyc", opt_name);
         break;
