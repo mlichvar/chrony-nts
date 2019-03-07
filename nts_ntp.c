@@ -35,18 +35,25 @@
 #include "nts_ntp.h"
 #include "util.h"
 
+#include "siv_cmac.h"
+
 #define MAX_COOKIES 8
+#define NONCE_LENGTH 16
 #define UNIQ_ID_LENGTH 32
 
 #define MAX_SERVER_KEYS 3
 
 struct NTS_ClientInstance_Record {
-  NKE_Instance *nke;
-  NKE_Key c2s;
-  NKE_Key s2c;
+  IPAddr address;
+  int port;
+  char *name;
+  NKE_Instance nke;
   NKE_Cookie cookies[MAX_COOKIES];
   int num_cookies;
   int cookie_index;
+  struct siv_aes128_cmac_ctx siv_c2s;
+  struct siv_aes128_cmac_ctx siv_s2c;
+  unsigned char nonce[NONCE_LENGTH];
   unsigned char uniq_id[UNIQ_ID_LENGTH];
 };
 
@@ -201,22 +208,20 @@ NTS_GenerateResponseAuth(NTP_Packet *request, NTP_PacketInfo *req_info,
 }
 
 NTS_ClientInstance
-NTS_CreateClientInstance(void)
+NTS_CreateClientInstance(IPAddr *address, int port, const char *name)
 {
   NTS_ClientInstance inst;
 
   inst = MallocNew(struct NTS_ClientInstance_Record);
 
   memset(inst, 0, sizeof (*inst));
+  inst->address = *address;
+  inst->port = port;
+  inst->name = strdup(name);
   inst->num_cookies = 0;
   memset(inst->uniq_id, 0, sizeof (inst->uniq_id));
 
-#if 1
-  int i;
-  for (i = 0; i < MAX_COOKIES; i++)
-    inst->cookies[i].length = 100;
-  inst->num_cookies = MAX_COOKIES;
-#endif
+  inst->nke = NULL;
 
   return inst;
 }
@@ -224,7 +229,73 @@ NTS_CreateClientInstance(void)
 void
 NTS_DestroyClientInstance(NTS_ClientInstance inst)
 {
+  if (inst->nke)
+    NKE_DestroyInstance(inst->nke);
+
+  Free(inst->name);
   Free(inst);
+}
+
+static int
+needs_nke(NTS_ClientInstance inst)
+{
+  return inst->num_cookies == 0;
+}
+
+static void
+get_nke_data(NTS_ClientInstance inst)
+{
+  NKE_Key c2s, s2c;
+
+  assert(needs_nke(inst));
+
+  if (!inst->nke) {
+    inst->nke = NKE_CreateInstance();
+
+    if (!NKE_OpenClientConnection(inst->nke, &inst->address, inst->port, inst->name)) {
+      NKE_DestroyInstance(inst->nke);
+      inst->nke = NULL;
+      return;
+    }
+  }
+
+  inst->cookie_index = 0;
+  inst->num_cookies = NKE_GetCookies(inst->nke, inst->cookies, MAX_COOKIES);
+
+  if (inst->num_cookies == 0)
+    return;
+
+  if (!NKE_GetKeys(inst->nke, &c2s, &s2c)) {
+    inst->num_cookies = 0;
+    return;
+  }
+
+  assert(c2s.length == 2 * AES128_KEY_SIZE);
+  assert(s2c.length == 2 * AES128_KEY_SIZE);
+
+  DEBUG_LOG("c2s key: %x s2c key: %x", *(unsigned int *)c2s.key, *(unsigned int *)s2c.key);
+  siv_aes128_cmac_set_key(&inst->siv_c2s, (uint8_t *)c2s.key);
+  siv_aes128_cmac_set_key(&inst->siv_s2c, (uint8_t *)s2c.key);
+
+  NKE_DestroyInstance(inst->nke);
+  inst->nke = NULL;
+}
+
+int
+NTS_PrepareForAuth(NTS_ClientInstance inst)
+{
+  if (!needs_nke(inst))
+    return 1;
+
+  get_nke_data(inst);
+
+  if (needs_nke(inst))
+    return 0;
+
+  UTI_GetRandomBytes(&inst->uniq_id, sizeof (inst->uniq_id)); 
+  UTI_GetRandomBytes(&inst->nonce, sizeof (inst->nonce)); 
+
+  return 1;
 }
 
 int
@@ -232,15 +303,18 @@ NTS_GenerateRequestAuth(NTS_ClientInstance inst, NTP_Packet *packet,
                         NTP_PacketInfo *info)
 {
   NKE_Cookie *cookie;
-  unsigned char auth[100];
   int i;
-
-  if (inst->num_cookies <= 0)
+  struct {
+    uint16_t nonce_length;
+    uint16_t ciphertext_length;
+    uint8_t nonce[NONCE_LENGTH];
+    uint8_t ciphertext[SIV_DIGEST_SIZE];
+  } auth;
+  
+  if (needs_nke(inst))
     return 0;
 
   cookie = &inst->cookies[inst->cookie_index];
-
-  UTI_GetRandomBytes(&inst->uniq_id, sizeof (inst->uniq_id)); 
 
   if (!NEF_AddField(packet, info, NTP_EF_NTS_UNIQUE_IDENTIFIER,
                     &inst->uniq_id, sizeof (inst->uniq_id)))
@@ -256,9 +330,23 @@ NTS_GenerateRequestAuth(NTS_ClientInstance inst, NTP_Packet *packet,
       return 0;
   }
 
-  memset(auth, 0, sizeof (auth));
+  auth.nonce_length = htons(NONCE_LENGTH);
+  auth.ciphertext_length = htons(sizeof (auth.ciphertext));
+  memcpy(auth.nonce, inst->nonce, sizeof (auth.nonce));
+  siv_aes128_cmac_encrypt_message(&inst->siv_c2s, sizeof (inst->nonce), inst->nonce,
+                                  info->length, (uint8_t *)packet,
+                                  SIV_DIGEST_SIZE, 0, auth.ciphertext, (uint8_t *)"");
+
+#if 0
+  unsigned char x[100];
+  printf("decrypt: %d\n",
+         siv_aes128_cmac_decrypt_message(&inst->siv_c2s, sizeof (inst->nonce), inst->nonce,
+                                  info->length, (uint8_t *)packet,
+                                  SIV_DIGEST_SIZE, sizeof (auth.ciphertext),
+                                  x, auth.ciphertext));
+#endif
   if (!NEF_AddField(packet, info, NTP_EF_NTS_AUTH_AND_EEF,
-                    auth, sizeof (auth)))
+                    &auth, sizeof (auth)))
     return 0;
 
   inst->num_cookies--;

@@ -576,7 +576,7 @@ NCR_GetInstance(NTP_Remote_Address *remote_addr, NTP_Source_Type type, SourcePar
 
   if (params->nts) {
     result->auth.mode = AUTH_NTS;
-    result->auth.nts = NTS_CreateClientInstance();
+    result->auth.nts = NTS_CreateClientInstance(&remote_addr->ip_addr, /* TODO */ 11443, /* TODO */ "");
   } else if (params->authkey != INACTIVE_AUTHKEY) {
     result->auth.mode = AUTH_SYMMETRIC;
     result->auth.key_id = params->authkey;
@@ -1168,6 +1168,11 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
   } else {
     UTI_ZeroNtp64(&message.originate_ts);
     UTI_ZeroNtp64(&message.receive_ts);
+  }
+
+  if (auth->mode == AUTH_NTS && auth->nts) {
+    if (!NTS_PrepareForAuth(auth->nts))
+      return 0;
   }
 
   do {

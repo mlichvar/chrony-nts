@@ -43,8 +43,9 @@ extern int NTS_CheckRequestAuth(NTP_Packet *packet, NTP_PacketInfo *info);
 extern int NTS_GenerateResponseAuth(NTP_Packet *request, NTP_PacketInfo *req_info,
                                     NTP_Packet *response, NTP_PacketInfo *res_info);
 
-extern NTS_ClientInstance NTS_CreateClientInstance(void);
+extern NTS_ClientInstance NTS_CreateClientInstance(IPAddr *address, int port, const char *name);
 extern void NTS_DestroyClientInstance(NTS_ClientInstance inst);
+extern int NTS_PrepareForAuth(NTS_ClientInstance inst);
 extern int NTS_GenerateRequestAuth(NTS_ClientInstance inst, NTP_Packet *packet,
                                    NTP_PacketInfo *info);
 extern int NTS_CheckResponseAuth(NTS_ClientInstance inst, NTP_Packet *packet,
