@@ -355,12 +355,115 @@ NTS_GenerateRequestAuth(NTS_ClientInstance inst, NTP_Packet *packet,
   return 1;
 }
 
+static int
+extract_cookies(NTS_ClientInstance inst, NTP_Packet *packet, int length)
+{
+  int ef_type, ef_body_length, ef_parsed, parsed, index;
+  void *ef_body;
+
+  parsed = 0;
+
+  while (1) {
+    ef_parsed = NEF_ParseField(packet, length, parsed,
+                               &ef_type, &ef_body, &ef_body_length);
+    if (ef_parsed <= parsed)
+      break;
+    parsed = ef_parsed;
+
+    if (ef_type != NTP_EF_NTS_COOKIE)
+      continue;
+
+    if (inst->num_cookies >= MAX_COOKIES ||
+        ef_body_length > sizeof (inst->cookies[0].cookie))
+      break;
+
+    index = (inst->cookie_index + inst->num_cookies) % MAX_COOKIES;
+    memcpy(inst->cookies[index].cookie, ef_body, ef_body_length);
+    inst->cookies[index].length = ef_body_length;
+
+    inst->num_cookies++;
+
+    DEBUG_LOG("Extracted cookie");
+  }
+
+  return 1;
+}
+
 int
 NTS_CheckResponseAuth(NTS_ClientInstance inst, NTP_Packet *packet,
                       NTP_PacketInfo *info)
 {
+  int ef_type, ef_body_length, ef_parsed, parsed, has_uniq_id = 0, has_auth = 0;
+  void *ef_body;
+  struct AuthAndEEF auth_and_eef;
+  NTP_Packet plaintext;
+
   if (info->ext_fields == 0 || info->mode != MODE_SERVER)
     return 0;
 
-  return 0;
+  parsed = NTP_HEADER_LENGTH;
+
+  while (1) {
+    ef_parsed = NEF_ParseField(packet, info->length, parsed,
+                               &ef_type, &ef_body, &ef_body_length);
+    if (ef_parsed < parsed)
+      break;
+    parsed = ef_parsed;
+
+    switch (ef_type) {
+      case NTP_EF_NTS_UNIQUE_IDENTIFIER:
+        if (ef_body_length != sizeof (inst->uniq_id) ||
+            memcmp(inst->uniq_id, inst->uniq_id, sizeof (inst->uniq_id))) {
+          DEBUG_LOG("Invalid uniq id");
+          return 0;
+        }
+        has_uniq_id = 1;
+        break;
+      case NTP_EF_NTS_COOKIE:
+        DEBUG_LOG("Unencrypted cookie");
+        break;
+      case NTP_EF_NTS_AUTH_AND_EEF:
+        if (ef_parsed != info->length) {
+          DEBUG_LOG("Auth not last EF");
+          return 0;
+        }
+
+        if (!parse_auth_and_eef(ef_body, ef_body_length, &auth_and_eef))
+          return 0;
+
+        //TODO: check nonce length
+        if (auth_and_eef.ciphertext_length < SIV_DIGEST_SIZE ||
+            auth_and_eef.ciphertext_length > sizeof (plaintext.extensions))
+          return 0;
+
+        if (!siv_aes128_cmac_decrypt_message(&inst->siv_s2c,
+                                             auth_and_eef.nonce_length, auth_and_eef.nonce,
+                                             info->length - ef_body_length - 4, (uint8_t *)packet,
+                                             SIV_DIGEST_SIZE, auth_and_eef.ciphertext_length,
+                                             plaintext.extensions, auth_and_eef.ciphertext)) {
+          DEBUG_LOG("decrypt failed");
+          return 0;
+        }
+
+        has_auth = 1;
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (!has_uniq_id || !has_auth) {
+    DEBUG_LOG("Missing NTS EF");
+    return 0;
+  }
+
+  //TODO
+  plaintext.lvm = packet->lvm;
+  if (!extract_cookies(inst, &plaintext,
+                       NTP_HEADER_LENGTH + auth_and_eef.ciphertext_length - SIV_DIGEST_SIZE)) {
+    DEBUG_LOG("Couldn't extract cookies");
+    return 0;
+  }
+
+  return 1;
 }
