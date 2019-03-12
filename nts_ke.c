@@ -35,6 +35,8 @@
 #include "sched.h"
 #include "util.h"
 
+#include "siv_cmac.h"
+
 #include <gnutls/gnutls.h>
 
 #define ALPN_NAME "ntske/1"
@@ -121,6 +123,21 @@ struct NKE_Instance_Record {
   SCH_TimeoutID timeout;
   struct NKE_Message message;
 };
+
+typedef struct {
+  uint32_t key_id;
+  uint8_t nonce[16];
+  uint8_t ciphertext[64 + 16];
+} ServerCookie;
+
+typedef struct {
+  uint32_t id;
+  struct siv_aes128_cmac_ctx siv;
+} ServerKey;
+
+#define MAX_SERVER_KEYS 4
+ServerKey server_keys[MAX_SERVER_KEYS];
+int current_server_key;
 
 static int server_sock_fd4;
 static int server_sock_fd6;
@@ -437,6 +454,8 @@ prepare_request(NKE_Instance inst)
 static int
 prepare_response(NKE_Instance inst, int error, int next_protocol, int aead_algorithm)
 {
+  NKE_Cookie cookie;
+  NKE_Key c2s, s2c;
   uint16_t datum;
   int i;
 
@@ -457,10 +476,13 @@ prepare_response(NKE_Instance inst, int error, int next_protocol, int aead_algor
     if (!add_record(&inst->message, 1, RECORD_AEAD_ALGORITHM, &datum, sizeof (datum)))
       return 0;
 
-    /* TODO: make real cookies */
+    if (!NKE_GetKeys(inst, &c2s, &s2c))
+      return 0;
+
     for (i = 0; i < MAX_COOKIES; i++) {
-      datum = htons(0xff);
-      if (!add_record(&inst->message, 0, RECORD_COOKIE, &datum, sizeof (datum)))
+      if (!NKE_GenerateCookie(&c2s, &s2c, &cookie))
+        return 0;
+      if (!add_record(&inst->message, 0, RECORD_COOKIE, cookie.cookie, cookie.length))
         return 0;
     }
   }
@@ -842,6 +864,13 @@ NKE_Initialise(void)
   if (server_sock_fd4 != INVALID_SOCK_FD)
     SCH_AddFileHandler(server_sock_fd4, SCH_FILE_INPUT, accept_connection, NULL);
 #endif
+
+  uint8_t key[32];
+  UTI_GetRandomBytesUrandom(key, sizeof (key));
+  siv_aes128_cmac_set_key(&server_keys[0].siv, key);
+  while (server_keys[0].id == 0)
+    UTI_GetRandomBytes(&server_keys[0].id, sizeof (server_keys[0].id));
+  current_server_key = 0;
 }
 
 void
@@ -953,6 +982,80 @@ NKE_DestroyInstance(NKE_Instance inst)
     gnutls_deinit(inst->session);
 
   Free(inst);
+}
+
+int
+NKE_GenerateCookie(NKE_Key *c2s, NKE_Key *s2c, NKE_Cookie *nke_cookie)
+{
+  ServerCookie *cookie;
+  ServerKey *key;
+  uint8_t plaintext[64];
+
+  key = &server_keys[current_server_key];
+
+  assert(sizeof (nke_cookie->cookie) >= sizeof (cookie));
+
+  nke_cookie->length = sizeof (*cookie);
+
+  //TODO: alignment
+  cookie = (ServerCookie *)nke_cookie->cookie;
+  cookie->key_id = key->id;
+  UTI_GetRandomBytes(cookie->nonce, sizeof (cookie->nonce));
+
+  assert(c2s->length == 32);
+  assert(s2c->length == 32);
+
+  memcpy(plaintext, c2s->key, 32);
+  memcpy(plaintext + 32, s2c->key, 32);
+
+  assert(sizeof (cookie->ciphertext) == sizeof (plaintext) + SIV_DIGEST_SIZE);
+  siv_aes128_cmac_encrypt_message(&key->siv, sizeof (cookie->nonce), cookie->nonce,
+                                  0, NULL,
+                                  SIV_DIGEST_SIZE, sizeof (plaintext),
+                                  cookie->ciphertext, plaintext);
+
+  return 1;
+}
+
+int
+NKE_DecodeCookie(NKE_Cookie *nke_cookie, NKE_Key *c2s, NKE_Key *s2c)
+{
+  ServerCookie *cookie;
+  ServerKey *key;
+  struct {
+    uint8_t c2s[32];
+    uint8_t s2c[32];
+  } plaintext;
+
+  if (nke_cookie->length != sizeof (*cookie))
+    return 0;
+
+  //TODO: alignment
+  cookie = (ServerCookie *)nke_cookie->cookie;
+
+  key = &server_keys[current_server_key];
+  if (cookie->key_id != key->id) {
+    DEBUG_LOG("Unknown key ID");
+    return 0;
+  }
+
+  assert(sizeof (plaintext) + SIV_DIGEST_SIZE == sizeof (cookie->ciphertext));
+  if (!siv_aes128_cmac_decrypt_message(&key->siv, sizeof (cookie->nonce), cookie->nonce,
+                                       0, NULL,
+                                       SIV_DIGEST_SIZE, sizeof (cookie->ciphertext),
+                                       (unsigned char *)&plaintext, cookie->ciphertext)) {
+    DEBUG_LOG("SIV decrypt failed");
+    return 0;
+  }
+
+  assert(sizeof (plaintext.c2s) <= sizeof (c2s->key));
+  assert(sizeof (plaintext.s2c) <= sizeof (s2c->key));
+  c2s->length = sizeof (plaintext.c2s);
+  s2c->length = sizeof (plaintext.s2c);
+  memcpy(c2s->key, plaintext.c2s, sizeof (plaintext.c2s));
+  memcpy(s2c->key, plaintext.s2c, sizeof (plaintext.s2c));
+
+  return 1;
 }
 
 static NKE_Instance inst1;

@@ -41,8 +41,6 @@
 #define NONCE_LENGTH 16
 #define UNIQ_ID_LENGTH 32
 
-#define MAX_SERVER_KEYS 3
-
 struct NTS_ClientInstance_Record {
   IPAddr address;
   int port;
@@ -57,26 +55,19 @@ struct NTS_ClientInstance_Record {
   unsigned char uniq_id[UNIQ_ID_LENGTH];
 };
 
-struct ServerKey {
-  char key[32];
-  uint32_t id;
-};
-
-struct NTS_ServerInstance_Record {
-  NKE_Instance *nke;
-  struct ServerKey keys[MAX_SERVER_KEYS];
-  int num_keys;
-  int key_index;
-};
-
-typedef struct NTS_ServerInstance_Record *NTS_ServerInstance;
-
 struct AuthAndEEF {
   void *nonce;
   void *ciphertext;
   int nonce_length;
   int ciphertext_length;
 };
+
+struct {
+  struct siv_aes128_cmac_ctx siv_s2c;
+  unsigned char nonce[NONCE_LENGTH];
+  NKE_Cookie cookies[MAX_COOKIES];
+  int num_cookies;
+} server_inst;
 
 static int
 get_padded_length(int length)
@@ -119,15 +110,19 @@ NTS_Finalise(void)
 int
 NTS_CheckRequestAuth(NTP_Packet *packet, NTP_PacketInfo *info)
 {
-  int ef_type, ef_body_length, ef_parsed, parsed, cookie_length;
-  void *ef_body, *cookie;
+  int ef_type, ef_body_length, ef_parsed, parsed, has_auth = 0, has_cookie = 0;
+  int i, requested_cookies = 0;
+  void *ef_body;
   struct AuthAndEEF auth_and_eef;
+  NKE_Cookie cookie;
+  NKE_Key c2s, s2c;
+  struct siv_aes128_cmac_ctx siv_c2s;
+  NTP_Packet plaintext;
 
   if (info->ext_fields == 0 || info->mode != MODE_CLIENT)
     return 0;
 
   parsed = 0;
-  cookie = NULL;
 
   while (1) {
     ef_parsed = NEF_ParseField(packet, info->length, parsed,
@@ -138,48 +133,72 @@ NTS_CheckRequestAuth(NTP_Packet *packet, NTP_PacketInfo *info)
 
     switch (ef_type) {
       case NTP_EF_NTS_COOKIE:
-        if (cookie)
-          /* Exactly one cookie is expected */
+        if (has_cookie || ef_body_length > sizeof (cookie.cookie))
           return 0;
-        cookie = ef_body;
-        cookie_length = ef_body_length;
+        cookie.length = ef_body_length;
+        memcpy(cookie.cookie, ef_body, ef_body_length);
+        if (!NKE_DecodeCookie(&cookie, &c2s, &s2c))
+          return 0;
+        has_cookie = 1;
+        requested_cookies++;
         break;
       case NTP_EF_NTS_COOKIE_PLACEHOLDER:
+        requested_cookies++;
         break;
       case NTP_EF_NTS_AUTH_AND_EEF:
+        if (!has_cookie)
+          return 0;
         if (!parse_auth_and_eef(ef_body, ef_body_length, &auth_and_eef))
           return 0;
+        assert(c2s.length == 32);
+        siv_aes128_cmac_set_key(&siv_c2s, (uint8_t *)c2s.key);
+        if (!siv_aes128_cmac_decrypt_message(&siv_c2s,
+                                             auth_and_eef.nonce_length, auth_and_eef.nonce,
+                                             info->length - ef_body_length - 4, (uint8_t *)packet,
+                                             SIV_DIGEST_SIZE, auth_and_eef.ciphertext_length,
+                                             plaintext.extensions, auth_and_eef.ciphertext)) {
+          DEBUG_LOG("SIV decrypt failed");
+          return 0;
+        }
+        has_auth = 1;
         break;
       default:
         break;
     }
   }
 
-  if (cookie && cookie_length)
-    ;
+  if (!has_auth)
+    return 0;
+
+  //TODO: process plaintext?
+
+  assert(s2c.length == 32);
+  siv_aes128_cmac_set_key(&server_inst.siv_s2c, (uint8_t *)s2c.key);
+
+  UTI_GetRandomBytes(server_inst.nonce, sizeof (server_inst.nonce));
+
+  server_inst.num_cookies = MIN(MAX_COOKIES, requested_cookies);
+  for (i = 0; i < server_inst.num_cookies; i++)
+    NKE_GenerateCookie(&c2s, &s2c, &server_inst.cookies[i]);
 
   return 1;
-}
-
-static int
-add_response_cookie(NTP_Packet *packet, NTP_PacketInfo *info)
-{
-  char cookie[100];
-
-  memset(cookie, 0, sizeof (cookie));
-
-  return NEF_AddField(packet, info, NTP_EF_NTS_COOKIE, &cookie, sizeof (cookie));
 }
 
 int
 NTS_GenerateResponseAuth(NTP_Packet *request, NTP_PacketInfo *req_info,
                          NTP_Packet *response, NTP_PacketInfo *res_info)
 {
-  int ef_type, ef_body_length, ef_parsed, parsed;
+  int i, ef_type, ef_body_length, ef_parsed, parsed;
   void *ef_body;
+  NTP_Packet plaintext;
+  NTP_PacketInfo plaintext_info;
+  uint8_t auth[4 + NONCE_LENGTH + SIV_DIGEST_SIZE + MAX_COOKIES * (4 + NKE_MAX_COOKIE_LENGTH)];
+  int auth_length, ciphertext_length;
 
   if (req_info->mode != MODE_CLIENT || res_info->mode != MODE_SERVER)
     return 0;
+
+  //TODO: check if server_inst corresponds to this response
 
   parsed = 0;
 
@@ -195,14 +214,41 @@ NTS_GenerateResponseAuth(NTP_Packet *request, NTP_PacketInfo *req_info,
         /* Copy the ID from the request */
         if (!NEF_AddField(response, res_info, ef_type, ef_body, ef_body_length))
           return 0;
-      case NTP_EF_NTS_COOKIE:
-      case NTP_EF_NTS_COOKIE_PLACEHOLDER:
-        if (!add_response_cookie(response, res_info))
-          return 0;
       default:
         break;
     }
   }
+
+  //TODO: refactor this mess
+
+  plaintext_info = *res_info;
+  for (i = 0; i < server_inst.num_cookies; i++) {
+    if (!NEF_AddField(&plaintext, &plaintext_info, NTP_EF_NTS_COOKIE,
+                      &server_inst.cookies[i].cookie, server_inst.cookies[i].length))
+      return 0;
+  }
+
+  ciphertext_length = SIV_DIGEST_SIZE + (plaintext_info.length - res_info->length);
+  auth_length = 4 + sizeof (server_inst.nonce) + ciphertext_length;
+
+  //TODO: make sure response is not longer than request
+
+  assert(auth_length <= sizeof (auth));
+
+  *(uint16_t *)&auth[0] = htons(sizeof (server_inst.nonce));
+  *(uint16_t *)&auth[2] = htons(ciphertext_length);
+  memcpy(&auth[4], server_inst.nonce, sizeof (server_inst.nonce));
+
+  siv_aes128_cmac_encrypt_message(&server_inst.siv_s2c,
+                                  sizeof (server_inst.nonce), server_inst.nonce,
+                                  res_info->length, (uint8_t *)response,
+                                  SIV_DIGEST_SIZE, ciphertext_length - SIV_DIGEST_SIZE,
+                                  auth + (auth_length - ciphertext_length),
+                                  (uint8_t *)&plaintext + res_info->length);
+
+  if (!NEF_AddField(response, res_info, NTP_EF_NTS_AUTH_AND_EEF,
+                    auth, auth_length))
+    return 0;
 
   return 1;
 }
