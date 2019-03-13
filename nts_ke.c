@@ -1007,11 +1007,14 @@ NKE_OpenClientConnection(NKE_Instance inst, IPAddr *addr, int port, const char *
 {
   int sock_fd;
 
-  assert(inst->mode == KE_UNKNOWN);
+  assert(inst->state == KE_CLOSED);
 
   sock_fd = prepare_socket(KE_CLIENT, addr, port);
   if (sock_fd == INVALID_SOCK_FD)
     return 0;
+
+  if (inst->session)
+    gnutls_deinit(inst->session);
 
   inst->session = create_session(KE_CLIENT, sock_fd);
   if (!inst->session) {
@@ -1027,6 +1030,11 @@ NKE_OpenClientConnection(NKE_Instance inst, IPAddr *addr, int port, const char *
   SCH_AddFileHandler(sock_fd, SCH_FILE_INPUT | SCH_FILE_OUTPUT, read_write_socket, inst);
 
   return 1;
+}
+
+int NKE_IsClosed(NKE_Instance inst)
+{
+  return inst->state == KE_CLOSED;
 }
 
 int
@@ -1054,11 +1062,6 @@ NKE_GetKeys(NKE_Instance inst, NKE_Key *c2s, NKE_Key *s2c)
   s2c->length = sizeof (s2c->key);
 
   return 1;
-}
-
-void NKE_Disconnect(NKE_Instance inst)
-{
-  close_connection(inst);
 }
 
 void

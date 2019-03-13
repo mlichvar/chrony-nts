@@ -50,9 +50,9 @@ extern void NKE_Finalise(void);
 extern NKE_Instance NKE_CreateInstance(void);
 extern int NKE_OpenClientConnection(NKE_Instance inst, IPAddr *addr, int port,
                                     const char *name);
+extern int NKE_IsClosed(NKE_Instance inst);
 extern int NKE_GetCookies(NKE_Instance inst, NKE_Cookie *cookies, int max_cookies);
 extern int NKE_GetKeys(NKE_Instance inst, NKE_Key *c2s, NKE_Key *s2c);
-extern void NKE_Disconnect(NKE_Instance inst);
 extern void NKE_DestroyInstance(NKE_Instance inst);
 
 extern int NKE_GenerateCookie(NKE_Key *c2s, NKE_Key *s2c, NKE_Cookie *cookie);

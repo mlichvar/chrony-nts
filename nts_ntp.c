@@ -295,21 +295,17 @@ get_nke_data(NTS_ClientInstance inst)
 
   assert(needs_nke(inst));
 
-  if (!inst->nke) {
+  if (!inst->nke)
     inst->nke = NKE_CreateInstance();
-
-    if (!NKE_OpenClientConnection(inst->nke, &inst->address, inst->port, inst->name)) {
-      NKE_DestroyInstance(inst->nke);
-      inst->nke = NULL;
-      return;
-    }
-  }
 
   inst->cookie_index = 0;
   inst->num_cookies = NKE_GetCookies(inst->nke, inst->cookies, MAX_COOKIES);
 
-  if (inst->num_cookies == 0)
+  if (inst->num_cookies == 0) {
+    if (NKE_IsClosed(inst->nke))
+      NKE_OpenClientConnection(inst->nke, &inst->address, inst->port, inst->name);
     return;
+  }
 
   if (!NKE_GetKeys(inst->nke, &c2s, &s2c)) {
     inst->num_cookies = 0;
