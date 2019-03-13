@@ -70,6 +70,9 @@
 
 #define INVALID_SOCK_FD -4
 
+#define SERVER_TIMEOUT 2.0
+#define CLIENT_TIMEOUT 2.0
+
 /* TODO: make configurable */
 #define CA_CERT "nts/ca.crt"
 #define SERVER_CERT "nts/server.crt"
@@ -120,7 +123,7 @@ struct NKE_Instance_Record {
   NtsKeState state;
   int sock_fd;
   gnutls_session_t session;
-  SCH_TimeoutID timeout;
+  SCH_TimeoutID timeout_id;
   struct NKE_Message message;
 };
 
@@ -341,7 +344,7 @@ accept_connection(int server_fd, int event, void *arg)
     return;
   }
 
-  DEBUG_LOG("Accepted connection");
+  DEBUG_LOG("Accepted connection fd=%d", sock_fd);
 }
 
 static void
@@ -350,7 +353,8 @@ close_connection(NKE_Instance inst)
   if (inst->state == KE_CLOSED)
     return;
 
-  //SCH_RemoveTimeout(inst->timeout);
+  SCH_RemoveTimeout(inst->timeout_id);
+  inst->timeout_id = 0;
 
   if (inst->sock_fd != INVALID_SOCK_FD) {
     SCH_RemoveFileHandler(inst->sock_fd);
@@ -359,6 +363,17 @@ close_connection(NKE_Instance inst)
   }
 
   inst->state = KE_CLOSED;
+}
+
+static void
+session_timeout(void *arg)
+{
+  NKE_Instance inst = arg;
+
+  DEBUG_LOG("Connection timed out fd=%d", inst->sock_fd);
+
+  inst->timeout_id = 0;
+  close_connection(inst);
 }
 
 static void
@@ -953,6 +968,7 @@ NKE_CreateInstance(void)
   inst->state = KE_CLOSED;
   inst->sock_fd = INVALID_SOCK_FD;
   inst->session = NULL;
+  inst->timeout_id = 0;
   reset_message(&inst->message);
 
   return inst;
@@ -978,6 +994,7 @@ accept_server_connection(NKE_Instance inst, int sock_fd)
   inst->state = KE_HANDSHAKE;
   inst->sock_fd = sock_fd;
   inst->session = session;
+  inst->timeout_id = SCH_AddTimeoutByDelay(SERVER_TIMEOUT, session_timeout, inst);
   reset_message(&inst->message);
 
   SCH_AddFileHandler(inst->sock_fd, SCH_FILE_INPUT, read_write_socket, inst);
@@ -1005,6 +1022,7 @@ NKE_OpenClientConnection(NKE_Instance inst, IPAddr *addr, int port, const char *
   inst->mode = KE_CLIENT;
   inst->state = KE_WAIT_CONNECT;
   inst->sock_fd = sock_fd;
+  inst->timeout_id = SCH_AddTimeoutByDelay(CLIENT_TIMEOUT, session_timeout, inst);
 
   SCH_AddFileHandler(sock_fd, SCH_FILE_INPUT | SCH_FILE_OUTPUT, read_write_socket, inst);
 
