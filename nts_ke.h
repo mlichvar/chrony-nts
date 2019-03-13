@@ -58,6 +58,4 @@ extern void NKE_DestroyInstance(NKE_Instance inst);
 extern int NKE_GenerateCookie(NKE_Key *c2s, NKE_Key *s2c, NKE_Cookie *cookie);
 extern int NKE_DecodeCookie(NKE_Cookie *cookie, NKE_Key *c2s, NKE_Key *s2c);
 
-extern void NKE_test(void);
-
 #endif

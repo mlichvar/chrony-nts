@@ -75,7 +75,6 @@
 #define SERVER_CERT "nts/server.crt"
 #define SERVER_KEY "nts/server.key"
 
-#define SERVER_ADDRESS "127.0.0.1"
 #define SERVER_PORT 11443
 #define SERVER_NAME "localhost"
 
@@ -1056,27 +1055,4 @@ NKE_DecodeCookie(NKE_Cookie *nke_cookie, NKE_Key *c2s, NKE_Key *s2c)
   memcpy(s2c->key, plaintext.s2c, sizeof (plaintext.s2c));
 
   return 1;
-}
-
-static NKE_Instance inst1;
-
-void
-NKE_test(void)
-{
-
-  IPAddr ip;
-
-  NKE_Initialise();
-
-  if (!UTI_StringToIP(SERVER_ADDRESS, &ip))
-    return;
-
-  inst1 = NKE_CreateInstance();
-  NKE_OpenClientConnection(inst1, &ip, SERVER_PORT, "");
-
-  /*
-  NKE_DestroyInstance(inst1);
-
-  NKE_Finalise();
-  */
 }
