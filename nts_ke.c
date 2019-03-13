@@ -150,6 +150,9 @@ static int current_server_key;
 static int server_sock_fd4;
 static int server_sock_fd6;
 
+#define MAX_SERVER_INSTANCES 10
+static NKE_Instance server_instances[MAX_SERVER_INSTANCES];
+
 static void update_state(NKE_Instance inst);
 static void read_write_socket(int fd, int event, void *arg);
 static int accept_server_connection(NKE_Instance inst, int sock_fd);
@@ -197,7 +200,7 @@ prepare_socket(NtsKeMode mode, IPAddr *ip, int port)
         return INVALID_SOCK_FD;
       }
 
-      if (listen(sock_fd, 10) < 0) {
+      if (listen(sock_fd, MAX_SERVER_INSTANCES) < 0) {
         DEBUG_LOG("listen() failed : %s", strerror(errno));
         close(sock_fd);
         return INVALID_SOCK_FD;
@@ -307,17 +310,32 @@ check_alpn(gnutls_session_t session)
   return 1;
 }
 
-static NKE_Instance inst_server;
-
 static void
 accept_connection(int server_fd, int event, void *arg)
 {
   NKE_Instance inst;
-  int sock_fd;
+  int i, sock_fd;
 
   sock_fd = accept(server_fd, NULL, NULL);
   if (sock_fd < 0) {
     DEBUG_LOG("accept() failed : %s", strerror(errno));
+    return;
+  }
+
+  for (i = 0, inst = NULL; i < MAX_SERVER_INSTANCES; i++) {
+    if (server_instances[i] == NULL) {
+      inst = NKE_CreateInstance();
+      server_instances[i] = inst;
+      break;
+    } else if (server_instances[i]->state == KE_CLOSED) {
+      inst = server_instances[i];
+      break;
+    }
+  }
+
+  if (inst == NULL) {
+    DEBUG_LOG("Rejected connection");
+    close(sock_fd);
     return;
   }
 
@@ -330,8 +348,6 @@ accept_connection(int server_fd, int event, void *arg)
 
   UTI_FdSetCloexec(sock_fd);
 
-  inst = NKE_CreateInstance();
-
   if (!accept_server_connection(inst, sock_fd)) {
     NKE_DestroyInstance(inst);
     close(sock_fd);
@@ -339,9 +355,6 @@ accept_connection(int server_fd, int event, void *arg)
   }
 
   DEBUG_LOG("Accepted connection");
-
-  /* TODO: save inst */
-  inst_server = inst;
 }
 
 static void
@@ -869,6 +882,7 @@ void
 NKE_Initialise(void)
 {
   IPAddr ip;
+  int i;
 
   /* Must be called after closing unknown file descriptors */
   gnutls_global_init();
@@ -896,11 +910,23 @@ NKE_Initialise(void)
   while (server_keys[0].id == 0)
     UTI_GetRandomBytes(&server_keys[0].id, sizeof (server_keys[0].id));
   current_server_key = 0;
+
+  for (i = 0; i < MAX_SERVER_INSTANCES; i++)
+    server_instances[i] = NULL;
 }
 
 void
 NKE_Finalise(void)
 {
+  int i;
+
+  close(server_sock_fd4);
+  close(server_sock_fd6);
+
+  for (i = 0; i < MAX_SERVER_INSTANCES; i++) {
+    if (server_instances[i] != NULL)
+      NKE_DestroyInstance(server_instances[i]);
+  }
 }
 
 NKE_Instance
@@ -924,7 +950,12 @@ accept_server_connection(NKE_Instance inst, int sock_fd)
 {
   gnutls_session_t session;
 
-  assert(inst->mode == KE_UNKNOWN);
+  assert(inst->state == KE_CLOSED);
+
+  if (inst->session) {
+    gnutls_deinit(inst->session);
+    inst->session = NULL;
+  }
 
   session = create_session(KE_SERVER, sock_fd);
   if (!session)
@@ -934,6 +965,7 @@ accept_server_connection(NKE_Instance inst, int sock_fd)
   inst->state = KE_HANDSHAKE;
   inst->sock_fd = sock_fd;
   inst->session = session;
+  reset_message(&inst->message);
 
   SCH_AddFileHandler(inst->sock_fd, SCH_FILE_INPUT, read_write_socket, inst);
 
