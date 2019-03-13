@@ -229,21 +229,24 @@ prepare_socket(NtsKeMode mode, IPAddr *ip, int port)
 }
 
 static gnutls_session_t
-create_session(NtsKeMode mode, int sock_fd)
+create_session(NtsKeMode mode, int sock_fd, const char *server_name)
 {
   gnutls_session_t session;
   gnutls_datum_t alpn;
+
+  if (mode == KE_CLIENT && server_name == NULL) {
+    LOG(LOGS_ERR, "Missing NTS name");
+    return NULL;
+  }
 
   if (gnutls_init(&session, GNUTLS_NONBLOCK |
                   (mode == KE_SERVER ? GNUTLS_SERVER : GNUTLS_CLIENT)) < 0)
     return NULL;
 
   if (mode == KE_CLIENT) {
-#if 0
-    if (gnutls_server_name_set(session, GNUTLS_NAME_DNS, SERVER_NAME, strlen(SERVER_NAME)) < 0)
+    if (gnutls_server_name_set(session, GNUTLS_NAME_DNS, server_name, strlen(server_name)) < 0)
       return NULL;
-    gnutls_session_set_verify_cert(session, SERVER_NAME, 0);
-#endif
+    gnutls_session_set_verify_cert(session, server_name, 0);
   }
 
   if (gnutls_set_default_priority(session) < 0)
@@ -986,7 +989,7 @@ accept_server_connection(NKE_Instance inst, int sock_fd)
     inst->session = NULL;
   }
 
-  session = create_session(KE_SERVER, sock_fd);
+  session = create_session(KE_SERVER, sock_fd, NULL);
   if (!session)
     return 0;
 
@@ -1016,7 +1019,7 @@ NKE_OpenClientConnection(NKE_Instance inst, IPAddr *addr, int port, const char *
   if (inst->session)
     gnutls_deinit(inst->session);
 
-  inst->session = create_session(KE_CLIENT, sock_fd);
+  inst->session = create_session(KE_CLIENT, sock_fd, name);
   if (!inst->session) {
     close(sock_fd);
     return 0;

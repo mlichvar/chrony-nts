@@ -263,7 +263,7 @@ NTS_CreateClientInstance(IPAddr *address, int port, const char *name)
   memset(inst, 0, sizeof (*inst));
   inst->address = *address;
   inst->port = port;
-  inst->name = strdup(name);
+  inst->name = name ? strdup(name) : NULL;
   inst->num_cookies = 0;
   memset(inst->uniq_id, 0, sizeof (inst->uniq_id));
 
