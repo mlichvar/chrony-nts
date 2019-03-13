@@ -78,7 +78,8 @@
 #define SERVER_PORT 11443
 #define SERVER_NAME "localhost"
 
-#define SERVER_BIND_ADDRESS "0.0.0.0"
+#define SERVER_BIND_ADDRESS4 "0.0.0.0"
+#define SERVER_BIND_ADDRESS6 "::"
 
 struct RecordHeader {
   uint16_t type;
@@ -134,9 +135,17 @@ typedef struct {
   struct siv_aes128_cmac_ctx siv;
 } ServerKey;
 
+union sockaddr_in46 {
+  struct sockaddr_in in4;
+#ifdef FEAT_IPV6
+  struct sockaddr_in6 in6;
+#endif
+  struct sockaddr u;
+};
+
 #define MAX_SERVER_KEYS 4
-ServerKey server_keys[MAX_SERVER_KEYS];
-int current_server_key;
+static ServerKey server_keys[MAX_SERVER_KEYS];
+static int current_server_key;
 
 static int server_sock_fd4;
 static int server_sock_fd6;
@@ -148,13 +157,15 @@ static int accept_server_connection(NKE_Instance inst, int sock_fd);
 static int
 prepare_socket(NtsKeMode mode, IPAddr *ip, int port)
 {
-  struct sockaddr_in sin;
+  //TODO: share code with ntp_io and cmdmon
+
+  union sockaddr_in46 sin;
   int sock_fd, optval = 1;
 
-  if (!UTI_IPAndPortToSockaddr(ip, port, (struct sockaddr *)&sin))
+  if (!UTI_IPAndPortToSockaddr(ip, port, &sin.u))
     return INVALID_SOCK_FD;
 
-  if ((sock_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+  if ((sock_fd = socket(sin.u.sa_family, SOCK_STREAM, 0)) < 0)
     return INVALID_SOCK_FD;
 
   if (fcntl(sock_fd, F_SETFL, O_NONBLOCK)) {
@@ -171,7 +182,16 @@ prepare_socket(NtsKeMode mode, IPAddr *ip, int port)
         return INVALID_SOCK_FD;
       }
 
-      if (bind(sock_fd, &sin, sizeof (sin)) < 0) {
+#ifdef FEAT_IPV6
+      if (sin.u.sa_family == AF_INET6) {
+#ifdef IPV6_V6ONLY
+        /* Receive IPv6 packets only */
+        if (setsockopt(sock_fd, IPPROTO_IPV6, IPV6_V6ONLY, &optval, sizeof (optval)) < 0)
+          ;
+#endif
+      }
+#endif
+      if (bind(sock_fd, &sin.u, sizeof (sin)) < 0) {
         DEBUG_LOG("bind() failed : %s", strerror(errno));
         close(sock_fd);
         return INVALID_SOCK_FD;
@@ -184,7 +204,7 @@ prepare_socket(NtsKeMode mode, IPAddr *ip, int port)
       }
       break;
     case KE_CLIENT:
-      if (connect(sock_fd, &sin, sizeof (sin)) < 0 && errno != EINPROGRESS) {
+      if (connect(sock_fd, &sin.u, sizeof (sin)) < 0 && errno != EINPROGRESS) {
         DEBUG_LOG("connect() failed : %s", strerror(errno));
         close(sock_fd);
         return INVALID_SOCK_FD;
@@ -848,20 +868,26 @@ read_write_socket(int fd, int event, void *arg)
 void
 NKE_Initialise(void)
 {
+  IPAddr ip;
+
   /* Must be called after closing unknown file descriptors */
   gnutls_global_init();
 
   server_sock_fd4 = INVALID_SOCK_FD;
   server_sock_fd6 = INVALID_SOCK_FD;
 
-  IPAddr ip;
-  if (!UTI_StringToIP(SERVER_BIND_ADDRESS, &ip))
-    return;
-
 #if 1
+  if (!UTI_StringToIP(SERVER_BIND_ADDRESS4, &ip))
+    return;
   server_sock_fd4 = prepare_socket(KE_SERVER, &ip, SERVER_PORT);
   if (server_sock_fd4 != INVALID_SOCK_FD)
     SCH_AddFileHandler(server_sock_fd4, SCH_FILE_INPUT, accept_connection, NULL);
+
+  if (!UTI_StringToIP(SERVER_BIND_ADDRESS6, &ip))
+    return;
+  server_sock_fd6 = prepare_socket(KE_SERVER, &ip, SERVER_PORT);
+  if (server_sock_fd6 != INVALID_SOCK_FD)
+    SCH_AddFileHandler(server_sock_fd6, SCH_FILE_INPUT, accept_connection, NULL);
 #endif
 
   uint8_t key[32];
