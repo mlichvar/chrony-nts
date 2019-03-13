@@ -515,7 +515,8 @@ take_offline(NCR_Instance inst)
 /* ================================================== */
 
 NCR_Instance
-NCR_GetInstance(NTP_Remote_Address *remote_addr, NTP_Source_Type type, SourceParameters *params)
+NCR_CreateInstance(NTP_Remote_Address *remote_addr, NTP_Source_Type type,
+                   SourceParameters *params, const char *name)
 {
   NCR_Instance result;
 
@@ -576,7 +577,7 @@ NCR_GetInstance(NTP_Remote_Address *remote_addr, NTP_Source_Type type, SourcePar
 
   if (params->nts) {
     result->auth.mode = AUTH_NTS;
-    result->auth.nts = NTS_CreateClientInstance(&remote_addr->ip_addr, /* TODO */ 11443, /* TODO */ "");
+    result->auth.nts = NTS_CreateClientInstance(&remote_addr->ip_addr, /* TODO */ 11443, name);
   } else if (params->authkey != INACTIVE_AUTHKEY) {
     result->auth.mode = AUTH_SYMMETRIC;
     result->auth.key_id = params->authkey;
