@@ -152,6 +152,9 @@ static int server_sock_fd6;
 
 #define MAX_SERVER_INSTANCES 10
 static NKE_Instance server_instances[MAX_SERVER_INSTANCES];
+static gnutls_certificate_credentials_t server_credentials;
+
+static gnutls_certificate_credentials_t client_credentials;
 
 static void update_state(NKE_Instance inst);
 static void read_write_socket(int fd, int event, void *arg);
@@ -225,25 +228,8 @@ prepare_socket(NtsKeMode mode, IPAddr *ip, int port)
 static gnutls_session_t
 create_session(NtsKeMode mode, int sock_fd)
 {
-  gnutls_certificate_credentials_t xcred;
   gnutls_session_t session;
   gnutls_datum_t alpn;
-
-  if (gnutls_certificate_allocate_credentials(&xcred) < 0)
-    return NULL;
-
-  if (gnutls_certificate_set_x509_system_trust(xcred) < 0)
-    return NULL;
-
-
-  if (mode == KE_SERVER) {
-    if (gnutls_certificate_set_x509_trust_file(xcred, CA_CERT, GNUTLS_X509_FMT_PEM) < 0)
-      return NULL;
-
-    if (gnutls_certificate_set_x509_key_file(xcred, SERVER_CERT, SERVER_KEY,
-                                             GNUTLS_X509_FMT_PEM) < 0)
-      return NULL;
-  }
 
   if (gnutls_init(&session, GNUTLS_NONBLOCK |
                   (mode == KE_SERVER ? GNUTLS_SERVER : GNUTLS_CLIENT)) < 0)
@@ -260,7 +246,8 @@ create_session(NtsKeMode mode, int sock_fd)
   if (gnutls_set_default_priority(session) < 0)
     return NULL;
 
-  if (gnutls_credentials_set(session, GNUTLS_CRD_CERTIFICATE, xcred) < 0)
+  if (gnutls_credentials_set(session, GNUTLS_CRD_CERTIFICATE,
+                             mode == KE_CLIENT ? client_credentials : server_credentials) < 0)
     return NULL;
 
   //TODO: disable TLS < 1.2, disable RC4!
@@ -882,10 +869,32 @@ void
 NKE_Initialise(void)
 {
   IPAddr ip;
-  int i;
+  int i, r;
 
   /* Must be called after closing unknown file descriptors */
   gnutls_global_init();
+
+  r = gnutls_certificate_allocate_credentials(&server_credentials);
+  if (r < 0)
+    LOG_FATAL("gnutls: %s", gnutls_strerror(r));
+
+  r = gnutls_certificate_set_x509_key_file(server_credentials, SERVER_CERT, SERVER_KEY,
+                                           GNUTLS_X509_FMT_PEM);
+  if (r < 0)
+    LOG_FATAL("gnutls: %s", gnutls_strerror(r));
+
+  r = gnutls_certificate_allocate_credentials(&client_credentials);
+  if (r < 0)
+    LOG_FATAL("gnutls: %s", gnutls_strerror(r));
+
+  r = gnutls_certificate_set_x509_system_trust(client_credentials);
+  if (r < 0)
+    LOG_FATAL("gnutls: %s", gnutls_strerror(r));
+
+  r = gnutls_certificate_set_x509_trust_file(client_credentials, CA_CERT,
+                                             GNUTLS_X509_FMT_PEM);
+  if (r < 0)
+    LOG_FATAL("gnutls: %s", gnutls_strerror(r));
 
   server_sock_fd4 = INVALID_SOCK_FD;
   server_sock_fd6 = INVALID_SOCK_FD;
@@ -927,6 +936,10 @@ NKE_Finalise(void)
     if (server_instances[i] != NULL)
       NKE_DestroyInstance(server_instances[i]);
   }
+
+  gnutls_certificate_free_credentials(client_credentials);
+  gnutls_certificate_free_credentials(server_credentials);
+  gnutls_global_deinit();
 }
 
 NKE_Instance
