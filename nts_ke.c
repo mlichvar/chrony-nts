@@ -146,7 +146,9 @@ union sockaddr_in46 {
   struct sockaddr u;
 };
 
-#define MAX_SERVER_KEYS 4
+#define SERVER_KEY_TIMEOUT 3600
+#define KEY_ID_INDEX_BITS 2
+#define MAX_SERVER_KEYS (1U << KEY_ID_INDEX_BITS)
 static ServerKey server_keys[MAX_SERVER_KEYS];
 static int current_server_key;
 
@@ -883,6 +885,32 @@ read_write_socket(int fd, int event, void *arg)
   update_state(inst);
 }
 
+static void
+generate_server_key(void)
+{
+  uint8_t key[32];
+
+  current_server_key = (current_server_key + 1) % MAX_SERVER_KEYS;
+
+  UTI_GetRandomBytesUrandom(key, sizeof (key));
+  siv_aes128_cmac_set_key(&server_keys[current_server_key].siv, key);
+
+  UTI_GetRandomBytes(&server_keys[current_server_key].id,
+                     sizeof (server_keys[current_server_key].id));
+
+  server_keys[current_server_key].id &= -1U << KEY_ID_INDEX_BITS;
+  server_keys[current_server_key].id |= current_server_key;
+
+  DEBUG_LOG("Generated server key %"PRIx32, server_keys[current_server_key].id);
+}
+
+static void
+server_key_timeout(void *arg)
+{
+  generate_server_key();
+  SCH_AddTimeoutByDelay(SERVER_KEY_TIMEOUT, server_key_timeout, NULL);
+}
+
 void
 NKE_Initialise(void)
 {
@@ -931,12 +959,8 @@ NKE_Initialise(void)
     SCH_AddFileHandler(server_sock_fd6, SCH_FILE_INPUT, accept_connection, NULL);
 #endif
 
-  uint8_t key[32];
-  UTI_GetRandomBytesUrandom(key, sizeof (key));
-  siv_aes128_cmac_set_key(&server_keys[0].siv, key);
-  while (server_keys[0].id == 0)
-    UTI_GetRandomBytes(&server_keys[0].id, sizeof (server_keys[0].id));
   current_server_key = 0;
+  server_key_timeout(NULL);
 
   for (i = 0; i < MAX_SERVER_INSTANCES; i++)
     server_instances[i] = NULL;
@@ -1127,9 +1151,9 @@ NKE_DecodeCookie(NKE_Cookie *nke_cookie, NKE_Key *c2s, NKE_Key *s2c)
   //TODO: alignment
   cookie = (ServerCookie *)nke_cookie->cookie;
 
-  key = &server_keys[current_server_key];
+  key = &server_keys[cookie->key_id % MAX_SERVER_KEYS];
   if (cookie->key_id != key->id) {
-    DEBUG_LOG("Unknown key ID");
+    DEBUG_LOG("Unknown key %"PRIx32, cookie->key_id);
     return 0;
   }
 
