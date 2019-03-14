@@ -139,4 +139,8 @@ typedef struct {
 
 extern int CNF_GetHwTsInterface(unsigned int index, CNF_HwTsInterface **iface);
 
+extern char *CNF_GetNtsCaCertFile(void);
+extern char *CNF_GetNtsServerCertFile(void);
+extern char *CNF_GetNtsServerKeyFile(void);
+
 #endif /* GOT_CONF_H */

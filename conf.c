@@ -223,6 +223,11 @@ static char *leapsec_tz = NULL;
 /* Name of the user to which will be dropped root privileges. */
 static char *user;
 
+/* NTS certificates and private key */
+static char *nts_ca_cert_file = NULL;
+static char *nts_server_cert_file = NULL;
+static char *nts_server_key_file = NULL;
+
 /* Array of CNF_HwTsInterface */
 static ARR_Instance hwts_interfaces;
 
@@ -390,6 +395,9 @@ CNF_Finalise(void)
   Free(mail_user_on_change);
   Free(tempcomp_sensor_file);
   Free(tempcomp_point_file);
+  Free(nts_ca_cert_file);
+  Free(nts_server_cert_file);
+  Free(nts_server_key_file);
 }
 
 /* ================================================== */
@@ -534,6 +542,12 @@ CNF_ParseLine(const char *filename, int number, char *line)
     no_client_log = parse_null(p);
   } else if (!strcasecmp(command, "ntpsigndsocket")) {
     parse_string(p, &ntp_signd_socket);
+  } else if (!strcasecmp(command, "ntscacert")) {
+    parse_string(p, &nts_ca_cert_file);
+  } else if (!strcasecmp(command, "ntsservercert")) {
+    parse_string(p, &nts_server_cert_file);
+  } else if (!strcasecmp(command, "ntsserverkey")) {
+    parse_string(p, &nts_server_key_file);
   } else if (!strcasecmp(command, "peer")) {
     parse_source(p, NTP_PEER, 0);
   } else if (!strcasecmp(command, "pidfile")) {
@@ -2033,4 +2047,28 @@ CNF_GetHwTsInterface(unsigned int index, CNF_HwTsInterface **iface)
 
   *iface = (CNF_HwTsInterface *)ARR_GetElement(hwts_interfaces, index);
   return 1;
+}
+
+/* ================================================== */
+
+char *
+CNF_GetNtsCaCertFile(void)
+{
+  return nts_ca_cert_file;
+}
+
+/* ================================================== */
+
+char *
+CNF_GetNtsServerCertFile(void)
+{
+  return nts_server_cert_file;
+}
+
+/* ================================================== */
+
+char *
+CNF_GetNtsServerKeyFile(void)
+{
+  return nts_server_key_file;
 }

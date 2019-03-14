@@ -30,6 +30,7 @@
 
 #include "nts_ke.h"
 
+#include "conf.h"
 #include "logging.h"
 #include "memory.h"
 #include "sched.h"
@@ -72,11 +73,6 @@
 
 #define SERVER_TIMEOUT 2.0
 #define CLIENT_TIMEOUT 2.0
-
-/* TODO: make configurable */
-#define CA_CERT "nts/ca.crt"
-#define SERVER_CERT "nts/server.crt"
-#define SERVER_KEY "nts/server.key"
 
 #define SERVER_PORT 11443
 #define SERVER_NAME "localhost"
@@ -914,8 +910,13 @@ server_key_timeout(void *arg)
 void
 NKE_Initialise(void)
 {
+  char *cert, *key, *ca_cert;
   IPAddr ip;
   int i, r;
+
+  cert = CNF_GetNtsServerCertFile();
+  key = CNF_GetNtsServerKeyFile();
+  ca_cert = CNF_GetNtsCaCertFile();
 
   /* Must be called after closing unknown file descriptors */
   gnutls_global_init();
@@ -924,10 +925,12 @@ NKE_Initialise(void)
   if (r < 0)
     LOG_FATAL("gnutls: %s", gnutls_strerror(r));
 
-  r = gnutls_certificate_set_x509_key_file(server_credentials, SERVER_CERT, SERVER_KEY,
-                                           GNUTLS_X509_FMT_PEM);
-  if (r < 0)
-    LOG_FATAL("gnutls: %s", gnutls_strerror(r));
+  if (cert && key) {
+    r = gnutls_certificate_set_x509_key_file(server_credentials, cert, key,
+                                             GNUTLS_X509_FMT_PEM);
+    if (r < 0)
+      LOG_FATAL("gnutls: %s", gnutls_strerror(r));
+  }
 
   r = gnutls_certificate_allocate_credentials(&client_credentials);
   if (r < 0)
@@ -937,10 +940,12 @@ NKE_Initialise(void)
   if (r < 0)
     LOG_FATAL("gnutls: %s", gnutls_strerror(r));
 
-  r = gnutls_certificate_set_x509_trust_file(client_credentials, CA_CERT,
-                                             GNUTLS_X509_FMT_PEM);
-  if (r < 0)
-    LOG_FATAL("gnutls: %s", gnutls_strerror(r));
+  if (ca_cert) {
+    r = gnutls_certificate_set_x509_trust_file(client_credentials, ca_cert,
+                                               GNUTLS_X509_FMT_PEM);
+    if (r < 0)
+      LOG_FATAL("gnutls: %s", gnutls_strerror(r));
+  }
 
   server_sock_fd4 = INVALID_SOCK_FD;
   server_sock_fd6 = INVALID_SOCK_FD;
