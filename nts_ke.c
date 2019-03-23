@@ -643,6 +643,7 @@ process_response(NKE_Instance inst, NKE_Cookie *cookies, int max_cookies)
       case RECORD_NTPV4_PORT_NEGOTIATION:
         /* TODO */
       default:
+        DEBUG_LOG("Unknown record type=%d length=%d critical=%d", type, length, critical);
         if (critical)
           error = 1;
     }
