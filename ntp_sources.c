@@ -335,7 +335,7 @@ replace_source(NTP_Remote_Address *old_addr, NTP_Remote_Address *new_addr)
     return NSR_NoSuchSource;
 
   find_slot(new_addr, &slot2, &found);
-  if (found)
+  if (found == 2)
     return NSR_AlreadyInUse;
 
   record = get_record(slot1);
