@@ -121,6 +121,7 @@ struct NKE_Instance_Record {
   gnutls_session_t session;
   SCH_TimeoutID timeout_id;
   struct NKE_Message message;
+  IPAddr remote_addr;
 };
 
 typedef struct {
@@ -589,7 +590,7 @@ process_request(NKE_Instance inst)
 }
 
 static int
-process_response(NKE_Instance inst, NKE_Cookie *cookies, int max_cookies)
+process_response(NKE_Instance inst, NKE_Cookie *cookies, int max_cookies, IPAddr *addr, int *port)
 {
   int next_protocol = NEXT_PROTOCOL_NONE, aead_algorithm = AEAD_NONE, error = ERROR_NONE;
   int num_cookies = 0, critical, type, length;
@@ -640,8 +641,32 @@ process_response(NKE_Instance inst, NKE_Cookie *cookies, int max_cookies)
       case RECORD_END_OF_MESSAGE:
         break;
       case RECORD_NTPV4_SERVER_NEGOTIATION:
+        if (length < 2) {
+          error = ERROR_BAD_RESPONSE;
+          break;
+        } else {
+          char buf[MAX_RECORD_BODY_LENGTH + 1];
+          IPAddr a;
+
+          /* TODO: IPv6 and hostname */
+          if (length >= sizeof (buf) ||
+              snprintf(buf, length + 1, "%s", (char *)data) >= sizeof (buf) ||
+              !UTI_StringToIP(buf, &a)) {
+            error = ERROR_BAD_RESPONSE;
+            break;
+          }
+          if (addr)
+            *addr = a;
+        }
+        break;
       case RECORD_NTPV4_PORT_NEGOTIATION:
-        /* TODO */
+        if (length != 2) {
+          error = ERROR_BAD_RESPONSE;
+          break;
+        }
+        if (port)
+          *port = ntohs(data[0]);
+        break;
       default:
         DEBUG_LOG("Unknown record type=%d length=%d critical=%d", type, length, critical);
         if (critical)
@@ -1062,6 +1087,7 @@ NKE_OpenClientConnection(NKE_Instance inst, IPAddr *addr, int port, const char *
   inst->state = KE_WAIT_CONNECT;
   inst->sock_fd = sock_fd;
   inst->timeout_id = SCH_AddTimeoutByDelay(CLIENT_TIMEOUT, session_timeout, inst);
+  inst->remote_addr = *addr;
 
   SCH_AddFileHandler(sock_fd, SCH_FILE_INPUT | SCH_FILE_OUTPUT, read_write_socket, inst);
 
@@ -1079,7 +1105,34 @@ NKE_GetCookies(NKE_Instance inst, NKE_Cookie *cookies, int max_cookies)
   if (inst->mode != KE_CLIENT && inst->state != KE_CLOSED)
     return 0;
 
-  return process_response(inst, cookies, max_cookies);
+  return process_response(inst, cookies, max_cookies, NULL, NULL);
+}
+
+int
+NKE_GetNtpAddress(NKE_Instance inst, NTP_Remote_Address *address)
+{
+  NKE_Cookie cookie;
+  IPAddr addr;
+  int port;
+
+  if (inst->mode != KE_CLIENT && inst->state != KE_CLOSED)
+    return 0;
+
+  addr.family = IPADDR_UNSPEC;
+  port = 0;
+  if (!process_response(inst, &cookie, 1, &addr, &port))
+    return 0;
+
+  if (port == 0)
+    return 0;
+
+  if (addr.family != IPADDR_UNSPEC)
+    address->ip_addr = addr;
+  else
+    address->ip_addr = inst->remote_addr;
+  address->port = port;
+
+  return 1;
 }
 
 int

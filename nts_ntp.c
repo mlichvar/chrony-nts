@@ -35,6 +35,8 @@
 #include "nts_ntp.h"
 #include "util.h"
 
+#include "ntp_sources.h"
+
 #include "siv_cmac.h"
 
 #define MAX_COOKIES 8
@@ -291,6 +293,7 @@ needs_nke(NTS_ClientInstance inst)
 static void
 get_nke_data(NTS_ClientInstance inst)
 {
+  NTP_Remote_Address old_ntp_address, new_ntp_address;
   NKE_Key c2s, s2c;
 
   assert(needs_nke(inst));
@@ -305,6 +308,13 @@ get_nke_data(NTS_ClientInstance inst)
     if (NKE_IsClosed(inst->nke))
       NKE_OpenClientConnection(inst->nke, &inst->address, inst->port, inst->name);
     return;
+  }
+
+  if (NKE_GetNtpAddress(inst->nke, &new_ntp_address)) {
+    //TODO
+    old_ntp_address.ip_addr = inst->address;
+    old_ntp_address.port = 123;
+    NSR_ReplaceSource(&old_ntp_address, &new_ntp_address);
   }
 
   if (!NKE_GetKeys(inst->nke, &c2s, &s2c)) {
