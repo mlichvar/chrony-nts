@@ -577,7 +577,7 @@ NCR_CreateInstance(NTP_Remote_Address *remote_addr, NTP_Source_Type type,
 
   if (params->nts) {
     result->auth.mode = AUTH_NTS;
-    result->auth.nts = NTS_CreateClientInstance(&remote_addr->ip_addr, /* TODO */ 11443, name);
+    result->auth.nts = NTS_CreateClientInstance(&remote_addr->ip_addr, params->nts_port, name);
   } else if (params->authkey != INACTIVE_AUTHKEY) {
     result->auth.mode = AUTH_SYMMETRIC;
     result->auth.key_id = params->authkey;
