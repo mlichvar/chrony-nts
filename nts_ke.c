@@ -285,12 +285,15 @@ static int
 check_alpn(gnutls_session_t session)
 {
   gnutls_datum_t alpn;
+  int r;
 
   alpn.data = (unsigned char *)ALPN_NAME; //TODO: is this safe?
   alpn.size = sizeof (ALPN_NAME) - 1;
 
-  if (gnutls_alpn_get_selected_protocol(session, &alpn) < 0)
+  if ((r = gnutls_alpn_get_selected_protocol(session, &alpn)) < 0) {
+    DEBUG_LOG("gnutls_alpn_get_selected_protocol() fails: %s", gnutls_strerror(r));
     return 0;
+  }
 
   if (alpn.size != sizeof (ALPN_NAME) - 1 ||
       strncmp((const char *)alpn.data, ALPN_NAME, sizeof (ALPN_NAME) - 1)) {
