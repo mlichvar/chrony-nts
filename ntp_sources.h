@@ -77,6 +77,9 @@ extern NSR_Status NSR_RemoveSource(NTP_Remote_Address *remote_addr);
 /* Procedure to remove all sources */
 extern void NSR_RemoveAllSources(void);
 
+/* Procedure to change the address of a source */
+extern NSR_Status NSR_ReplaceSource(NTP_Remote_Address *old_addr, NTP_Remote_Address *new_addr);
+
 /* Procedure to try to find a replacement for a bad source */
 extern void NSR_HandleBadSource(IPAddr *address);
 

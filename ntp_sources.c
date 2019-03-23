@@ -323,8 +323,8 @@ add_source(NTP_Remote_Address *remote_addr, char *name, NTP_Source_Type type, So
 
 /* ================================================== */
 
-static NSR_Status
-replace_source(NTP_Remote_Address *old_addr, NTP_Remote_Address *new_addr)
+NSR_Status
+NSR_ReplaceSource(NTP_Remote_Address *old_addr, NTP_Remote_Address *new_addr)
 {
   int slot1, slot2, found;
   SourceRecord *record;
@@ -380,7 +380,7 @@ process_resolved_name(struct UnresolvedSource *us, IPAddr *ip_addrs, int n_addrs
     DEBUG_LOG("(%d) %s", i + 1, UTI_IPToString(&address.ip_addr));
 
     if (us->replacement) {
-      if (replace_source(&us->replace_source, &address) != NSR_AlreadyInUse)
+      if (NSR_ReplaceSource(&us->replace_source, &address) != NSR_AlreadyInUse)
         break;
     } else {
       if (add_source(&address, us->name, us->new_source.type, &us->new_source.params,
