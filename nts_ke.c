@@ -74,9 +74,6 @@
 #define SERVER_TIMEOUT 2.0
 #define CLIENT_TIMEOUT 2.0
 
-#define SERVER_PORT 11443
-#define SERVER_NAME "localhost"
-
 #define SERVER_BIND_ADDRESS4 "0.0.0.0"
 #define SERVER_BIND_ADDRESS6 "::"
 
@@ -982,13 +979,13 @@ NKE_Initialise(void)
 #if 1
   if (!UTI_StringToIP(SERVER_BIND_ADDRESS4, &ip))
     return;
-  server_sock_fd4 = prepare_socket(KE_SERVER, &ip, SERVER_PORT);
+  server_sock_fd4 = prepare_socket(KE_SERVER, &ip, CNF_GetNtsServerPort());
   if (server_sock_fd4 != INVALID_SOCK_FD)
     SCH_AddFileHandler(server_sock_fd4, SCH_FILE_INPUT, accept_connection, NULL);
 
   if (!UTI_StringToIP(SERVER_BIND_ADDRESS6, &ip))
     return;
-  server_sock_fd6 = prepare_socket(KE_SERVER, &ip, SERVER_PORT);
+  server_sock_fd6 = prepare_socket(KE_SERVER, &ip, CNF_GetNtsServerPort());
   if (server_sock_fd6 != INVALID_SOCK_FD)
     SCH_AddFileHandler(server_sock_fd6, SCH_FILE_INPUT, accept_connection, NULL);
 #endif

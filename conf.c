@@ -227,6 +227,7 @@ static char *user;
 static char *nts_ca_cert_file = NULL;
 static char *nts_server_cert_file = NULL;
 static char *nts_server_key_file = NULL;
+static int nts_server_port = 11443;
 
 /* Array of CNF_HwTsInterface */
 static ARR_Instance hwts_interfaces;
@@ -544,6 +545,8 @@ CNF_ParseLine(const char *filename, int number, char *line)
     parse_string(p, &ntp_signd_socket);
   } else if (!strcasecmp(command, "ntscacert")) {
     parse_string(p, &nts_ca_cert_file);
+  } else if (!strcasecmp(command, "ntsport")) {
+    parse_int(p, &nts_server_port);
   } else if (!strcasecmp(command, "ntsservercert")) {
     parse_string(p, &nts_server_cert_file);
   } else if (!strcasecmp(command, "ntsserverkey")) {
@@ -2071,4 +2074,11 @@ char *
 CNF_GetNtsServerKeyFile(void)
 {
   return nts_server_key_file;
+}
+/* ================================================== */
+
+int
+CNF_GetNtsServerPort(void)
+{
+  return nts_server_port;
 }
