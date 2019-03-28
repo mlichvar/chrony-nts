@@ -512,6 +512,12 @@ prepare_response(NKE_Instance inst, int error, int next_protocol, int aead_algor
     if (!add_record(&inst->message, 1, RECORD_AEAD_ALGORITHM, &datum, sizeof (datum)))
       return 0;
 
+    if (CNF_GetNTPPort() != NTP_PORT) {
+      datum = htons(CNF_GetNTPPort());
+      if (!add_record(&inst->message, 1, RECORD_NTPV4_PORT_NEGOTIATION, &datum, sizeof (datum)))
+        return 0;
+    }
+
     if (!NKE_GetKeys(inst, &c2s, &s2c))
       return 0;
 
