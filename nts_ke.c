@@ -33,6 +33,7 @@
 #include "conf.h"
 #include "logging.h"
 #include "memory.h"
+#include "ntp_core.h"
 #include "sched.h"
 #include "util.h"
 
@@ -319,6 +320,13 @@ accept_connection(int server_fd, int event, void *arg)
   }
 
   UTI_SockaddrToIPAndPort(&addr.u, &ip_addr, &port);
+
+  if (!NCR_CheckAccessRestriction(&ip_addr)) {
+    DEBUG_LOG("Rejected connection from %s:%d (%s)",
+              UTI_IPToString(&ip_addr), port, "access denied");
+    close(sock_fd);
+    return;
+  }
 
   for (i = 0, inst = NULL; i < MAX_SERVER_INSTANCES; i++) {
     if (server_instances[i] == NULL) {
