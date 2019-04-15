@@ -1235,6 +1235,13 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
            UTI_IsEqualAnyNtp64(&message.transmit_ts, &message.receive_ts,
                                &message.originate_ts, local_ntp_tx));
 
+  if (request_info && info.length > request_info->length) {
+    //TODO: limit to server/passive mode packets?
+    DEBUG_LOG("Not sending response longer than request %d > %d",
+              info.length, request_info->length);
+    return 0;
+  }
+
   ret = NIO_SendPacket(&message, where_to, from, info.length, local_tx != NULL);
 
   if (local_tx) {
