@@ -305,14 +305,20 @@ check_alpn(gnutls_session_t session)
 static void
 accept_connection(int server_fd, int event, void *arg)
 {
+  union sockaddr_in46 addr;
+  socklen_t addr_len = sizeof (addr);
+  IPAddr ip_addr;
+  unsigned short port;
   NKE_Instance inst;
   int i, sock_fd;
 
-  sock_fd = accept(server_fd, NULL, NULL);
+  sock_fd = accept(server_fd, &addr.u, &addr_len);
   if (sock_fd < 0) {
     DEBUG_LOG("accept() failed : %s", strerror(errno));
     return;
   }
+
+  UTI_SockaddrToIPAndPort(&addr.u, &ip_addr, &port);
 
   for (i = 0, inst = NULL; i < MAX_SERVER_INSTANCES; i++) {
     if (server_instances[i] == NULL) {
@@ -326,7 +332,8 @@ accept_connection(int server_fd, int event, void *arg)
   }
 
   if (inst == NULL) {
-    DEBUG_LOG("Rejected connection");
+    DEBUG_LOG("Rejected connection from %s:%d (%s)",
+              UTI_IPToString(&ip_addr), port, "too many connections");
     close(sock_fd);
     return;
   }
@@ -346,7 +353,8 @@ accept_connection(int server_fd, int event, void *arg)
     return;
   }
 
-  DEBUG_LOG("Accepted connection fd=%d", sock_fd);
+  DEBUG_LOG("Accepted connection from %s:%d fd=%d",
+            UTI_IPToString(&ip_addr), port, sock_fd);
 }
 
 static void
