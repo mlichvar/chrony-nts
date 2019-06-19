@@ -969,17 +969,6 @@ NKE_Initialise(void)
   /* Must be called after closing unknown file descriptors */
   gnutls_global_init();
 
-  r = gnutls_certificate_allocate_credentials(&server_credentials);
-  if (r < 0)
-    LOG_FATAL("gnutls: %s", gnutls_strerror(r));
-
-  if (cert && key) {
-    r = gnutls_certificate_set_x509_key_file(server_credentials, cert, key,
-                                             GNUTLS_X509_FMT_PEM);
-    if (r < 0)
-      LOG_FATAL("gnutls: %s", gnutls_strerror(r));
-  }
-
   r = gnutls_certificate_allocate_credentials(&client_credentials);
   if (r < 0)
     LOG_FATAL("gnutls: %s", gnutls_strerror(r));
@@ -995,28 +984,36 @@ NKE_Initialise(void)
       LOG_FATAL("gnutls: %s", gnutls_strerror(r));
   }
 
+  r = gnutls_certificate_allocate_credentials(&server_credentials);
+  if (r < 0)
+    LOG_FATAL("gnutls: %s", gnutls_strerror(r));
+
   server_sock_fd4 = INVALID_SOCK_FD;
   server_sock_fd6 = INVALID_SOCK_FD;
-
-#if 1
-  if (!UTI_StringToIP(SERVER_BIND_ADDRESS4, &ip))
-    return;
-  server_sock_fd4 = prepare_socket(KE_SERVER, &ip, CNF_GetNtsServerPort());
-  if (server_sock_fd4 != INVALID_SOCK_FD)
-    SCH_AddFileHandler(server_sock_fd4, SCH_FILE_INPUT, accept_connection, NULL);
-
-  if (!UTI_StringToIP(SERVER_BIND_ADDRESS6, &ip))
-    return;
-  server_sock_fd6 = prepare_socket(KE_SERVER, &ip, CNF_GetNtsServerPort());
-  if (server_sock_fd6 != INVALID_SOCK_FD)
-    SCH_AddFileHandler(server_sock_fd6, SCH_FILE_INPUT, accept_connection, NULL);
-#endif
-
-  current_server_key = 0;
-  server_key_timeout(NULL);
-
   for (i = 0; i < MAX_SERVER_INSTANCES; i++)
     server_instances[i] = NULL;
+
+  if (cert && key) {
+    r = gnutls_certificate_set_x509_key_file(server_credentials, cert, key,
+                                             GNUTLS_X509_FMT_PEM);
+    if (r < 0)
+      LOG_FATAL("gnutls: %s", gnutls_strerror(r));
+
+    if (!UTI_StringToIP(SERVER_BIND_ADDRESS4, &ip))
+      return;
+    server_sock_fd4 = prepare_socket(KE_SERVER, &ip, CNF_GetNtsServerPort());
+    if (server_sock_fd4 != INVALID_SOCK_FD)
+      SCH_AddFileHandler(server_sock_fd4, SCH_FILE_INPUT, accept_connection, NULL);
+
+    if (!UTI_StringToIP(SERVER_BIND_ADDRESS6, &ip))
+      return;
+    server_sock_fd6 = prepare_socket(KE_SERVER, &ip, CNF_GetNtsServerPort());
+    if (server_sock_fd6 != INVALID_SOCK_FD)
+      SCH_AddFileHandler(server_sock_fd6, SCH_FILE_INPUT, accept_connection, NULL);
+
+    current_server_key = 0;
+    server_key_timeout(NULL);
+  }
 }
 
 void
@@ -1024,8 +1021,10 @@ NKE_Finalise(void)
 {
   int i;
 
-  close(server_sock_fd4);
-  close(server_sock_fd6);
+  if (server_sock_fd4 != INVALID_SOCK_FD)
+    close(server_sock_fd4);
+  if (server_sock_fd6 != INVALID_SOCK_FD)
+    close(server_sock_fd6);
 
   for (i = 0; i < MAX_SERVER_INSTANCES; i++) {
     if (server_instances[i] != NULL)
