@@ -39,6 +39,8 @@
 #include "ntp_io.h"
 #include "ntp_sources.h"
 #include "ntp_signd.h"
+#include "nts_ke.h"
+#include "nts_ntp.h"
 #include "privops.h"
 #include "refclock.h"
 #include "sched.h"
@@ -410,3 +412,68 @@ NSD_SignAndSendPacket(uint32_t key_id, NTP_Packet *packet, NTP_Remote_Address *r
 }
 
 #endif /* !FEAT_SIGND */
+
+#ifndef FEAT_NTS
+
+void
+NTS_Initialise(void)
+{
+}
+
+void
+NTS_Finalise(void)
+{
+}
+
+int
+NTS_CheckRequestAuth(NTP_Packet *packet, NTP_PacketInfo *info)
+{
+  return 0;
+}
+
+int
+NTS_GenerateResponseAuth(NTP_Packet *request, NTP_PacketInfo *req_info,
+                         NTP_Packet *response, NTP_PacketInfo *res_info)
+{
+  return 0;
+}
+
+NTS_ClientInstance
+NTS_CreateClientInstance(IPAddr *address, int port, const char *name)
+{
+  return NULL;
+}
+
+void
+NTS_DestroyClientInstance(NTS_ClientInstance inst)
+{
+}
+
+int
+NTS_PrepareForAuth(NTS_ClientInstance inst)
+{
+  return 0;
+}
+
+int
+NTS_GenerateRequestAuth(NTS_ClientInstance inst, NTP_Packet *packet, NTP_PacketInfo *info)
+{
+  return 0;
+}
+
+int
+NTS_CheckResponseAuth(NTS_ClientInstance inst, NTP_Packet *packet, NTP_PacketInfo *info)
+{
+  return 0;
+}
+
+void
+NKE_Initialise(void)
+{
+}
+
+void NKE_Finalise(void)
+{
+}
+
+#endif /* !FEAT_NTS */
