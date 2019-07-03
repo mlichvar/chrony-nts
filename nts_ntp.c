@@ -51,8 +51,8 @@ struct NTS_ClientInstance_Record {
   NKE_Cookie cookies[MAX_COOKIES];
   int num_cookies;
   int cookie_index;
-  struct siv_aes128_cmac_ctx siv_c2s;
-  struct siv_aes128_cmac_ctx siv_s2c;
+  struct siv_cmac_aes128_ctx siv_c2s;
+  struct siv_cmac_aes128_ctx siv_s2c;
   unsigned char nonce[NONCE_LENGTH];
   unsigned char uniq_id[UNIQ_ID_LENGTH];
 };
@@ -65,7 +65,7 @@ struct AuthAndEEF {
 };
 
 struct {
-  struct siv_aes128_cmac_ctx siv_s2c;
+  struct siv_cmac_aes128_ctx siv_s2c;
   unsigned char nonce[NONCE_LENGTH];
   NKE_Cookie cookies[MAX_COOKIES];
   int num_cookies;
@@ -118,7 +118,7 @@ NTS_CheckRequestAuth(NTP_Packet *packet, NTP_PacketInfo *info)
   struct AuthAndEEF auth_and_eef;
   NKE_Cookie cookie;
   NKE_Key c2s, s2c;
-  struct siv_aes128_cmac_ctx siv_c2s;
+  struct siv_cmac_aes128_ctx siv_c2s;
   NTP_Packet plaintext;
 
   if (info->ext_fields == 0 || info->mode != MODE_CLIENT)
@@ -153,11 +153,11 @@ NTS_CheckRequestAuth(NTP_Packet *packet, NTP_PacketInfo *info)
         if (!parse_auth_and_eef(ef_body, ef_body_length, &auth_and_eef))
           return 0;
         assert(c2s.length == 32);
-        siv_aes128_cmac_set_key(&siv_c2s, (uint8_t *)c2s.key);
-        if (!siv_aes128_cmac_decrypt_message(&siv_c2s,
+        siv_cmac_aes128_set_key(&siv_c2s, (uint8_t *)c2s.key);
+        if (!siv_cmac_aes128_decrypt_message(&siv_c2s,
                                              auth_and_eef.nonce_length, auth_and_eef.nonce,
                                              info->length - ef_body_length - 4, (uint8_t *)packet,
-                                             SIV_DIGEST_SIZE, auth_and_eef.ciphertext_length,
+                                             auth_and_eef.ciphertext_length - SIV_DIGEST_SIZE,
                                              plaintext.extensions, auth_and_eef.ciphertext)) {
           DEBUG_LOG("SIV decrypt failed");
           return 0;
@@ -175,7 +175,7 @@ NTS_CheckRequestAuth(NTP_Packet *packet, NTP_PacketInfo *info)
   //TODO: process plaintext?
 
   assert(s2c.length == 32);
-  siv_aes128_cmac_set_key(&server_inst.siv_s2c, (uint8_t *)s2c.key);
+  siv_cmac_aes128_set_key(&server_inst.siv_s2c, (uint8_t *)s2c.key);
 
   UTI_GetRandomBytes(server_inst.nonce, sizeof (server_inst.nonce));
 
@@ -241,10 +241,10 @@ NTS_GenerateResponseAuth(NTP_Packet *request, NTP_PacketInfo *req_info,
   *(uint16_t *)&auth[2] = htons(ciphertext_length);
   memcpy(&auth[4], server_inst.nonce, sizeof (server_inst.nonce));
 
-  siv_aes128_cmac_encrypt_message(&server_inst.siv_s2c,
+  siv_cmac_aes128_encrypt_message(&server_inst.siv_s2c,
                                   sizeof (server_inst.nonce), server_inst.nonce,
                                   res_info->length, (uint8_t *)response,
-                                  SIV_DIGEST_SIZE, ciphertext_length - SIV_DIGEST_SIZE,
+                                  ciphertext_length,
                                   auth + (auth_length - ciphertext_length),
                                   (uint8_t *)&plaintext + res_info->length);
 
@@ -326,8 +326,8 @@ get_nke_data(NTS_ClientInstance inst)
   assert(s2c.length == 2 * AES128_KEY_SIZE);
 
   DEBUG_LOG("c2s key: %x s2c key: %x", *(unsigned int *)c2s.key, *(unsigned int *)s2c.key);
-  siv_aes128_cmac_set_key(&inst->siv_c2s, (uint8_t *)c2s.key);
-  siv_aes128_cmac_set_key(&inst->siv_s2c, (uint8_t *)s2c.key);
+  siv_cmac_aes128_set_key(&inst->siv_c2s, (uint8_t *)c2s.key);
+  siv_cmac_aes128_set_key(&inst->siv_s2c, (uint8_t *)s2c.key);
 
   NKE_DestroyInstance(inst->nke);
   inst->nke = NULL;
@@ -385,16 +385,16 @@ NTS_GenerateRequestAuth(NTS_ClientInstance inst, NTP_Packet *packet,
   auth.nonce_length = htons(NONCE_LENGTH);
   auth.ciphertext_length = htons(sizeof (auth.ciphertext));
   memcpy(auth.nonce, inst->nonce, sizeof (auth.nonce));
-  siv_aes128_cmac_encrypt_message(&inst->siv_c2s, sizeof (inst->nonce), inst->nonce,
+  siv_cmac_aes128_encrypt_message(&inst->siv_c2s, sizeof (inst->nonce), inst->nonce,
                                   info->length, (uint8_t *)packet,
-                                  SIV_DIGEST_SIZE, 0, auth.ciphertext, (uint8_t *)"");
+                                  SIV_DIGEST_SIZE, auth.ciphertext, (uint8_t *)"");
 
 #if 0
   unsigned char x[100];
   printf("decrypt: %d\n",
-         siv_aes128_cmac_decrypt_message(&inst->siv_c2s, sizeof (inst->nonce), inst->nonce,
+         siv_cmac_aes128_decrypt_message(&inst->siv_c2s, sizeof (inst->nonce), inst->nonce,
                                   info->length, (uint8_t *)packet,
-                                  SIV_DIGEST_SIZE, sizeof (auth.ciphertext),
+                                  sizeof (auth.ciphertext) - SIV_DIGEST_SIZE,
                                   x, auth.ciphertext));
 #endif
   if (!NEF_AddField(packet, info, NTP_EF_NTS_AUTH_AND_EEF,
@@ -488,10 +488,10 @@ NTS_CheckResponseAuth(NTS_ClientInstance inst, NTP_Packet *packet,
             auth_and_eef.ciphertext_length > sizeof (plaintext.extensions))
           return 0;
 
-        if (!siv_aes128_cmac_decrypt_message(&inst->siv_s2c,
+        if (!siv_cmac_aes128_decrypt_message(&inst->siv_s2c,
                                              auth_and_eef.nonce_length, auth_and_eef.nonce,
                                              info->length - ef_body_length - 4, (uint8_t *)packet,
-                                             SIV_DIGEST_SIZE, auth_and_eef.ciphertext_length,
+                                             auth_and_eef.ciphertext_length - SIV_DIGEST_SIZE,
                                              plaintext.extensions, auth_and_eef.ciphertext)) {
           DEBUG_LOG("decrypt failed");
           return 0;

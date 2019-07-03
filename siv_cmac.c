@@ -376,22 +376,24 @@ void _siv_s2v(nettle_set_key_func *cmac_set_key,
 }
 
 void
-siv_aes128_cmac_set_key(struct siv_aes128_cmac_ctx *ctx, const uint8_t *key)
+siv_cmac_aes128_set_key(struct siv_cmac_aes128_ctx *ctx, const uint8_t *key)
 {
   memcpy(ctx->s2vk, key, 16);
   aes128_set_encrypt_key(&ctx->cipher, key+16);
 }
 
 void
-siv_aes128_cmac_encrypt_message(struct siv_aes128_cmac_ctx *ctx,
+siv_cmac_aes128_encrypt_message(struct siv_cmac_aes128_ctx *ctx,
 				size_t nlength, const uint8_t *nonce,
 				size_t alength, const uint8_t *adata,
-				size_t tlength,
-				size_t slength, uint8_t *dst, const uint8_t *src)
+				size_t clength, uint8_t *dst, const uint8_t *src)
 {
   union nettle_block16 siv;
+  size_t slength;
 
-  assert(tlength == SIV_DIGEST_SIZE);
+  assert (clength >= SIV_DIGEST_SIZE);
+  slength = clength - SIV_DIGEST_SIZE;
+
   /* create CTR nonce */
   _siv_s2v((nettle_set_key_func*)cmac_aes128_set_key,
 	   (nettle_hash_update_func*)cmac_aes128_update,
@@ -407,31 +409,27 @@ siv_aes128_cmac_encrypt_message(struct siv_aes128_cmac_ctx *ctx,
 }
 
 int
-siv_aes128_cmac_decrypt_message(struct siv_aes128_cmac_ctx *ctx,
+siv_cmac_aes128_decrypt_message(struct siv_cmac_aes128_ctx *ctx,
 				size_t nlength, const uint8_t *nonce,
 				size_t alength, const uint8_t *adata,
-				size_t tlength,
 				size_t mlength, uint8_t *dst, const uint8_t *src)
 {
   union nettle_block16 siv;
   union nettle_block16 ctr;
-
-  assert(tlength == SIV_DIGEST_SIZE);
-  assert(mlength >= SIV_DIGEST_SIZE);
 
   memcpy(ctr.b, src, SIV_DIGEST_SIZE);
   ctr.b[8] &= ~0x80;
   ctr.b[12] &= ~0x80;
 
   ctr_crypt(&ctx->cipher, (nettle_cipher_func *)aes128_encrypt, AES_BLOCK_SIZE,
-            ctr.b, mlength-SIV_DIGEST_SIZE, dst, src+SIV_DIGEST_SIZE);
+            ctr.b, mlength, dst, src+SIV_DIGEST_SIZE);
 
   /* create CTR nonce */
   _siv_s2v((nettle_set_key_func*)cmac_aes128_set_key,
 	   (nettle_hash_update_func*)cmac_aes128_update,
 	   (nettle_hash_digest_func*)cmac_aes128_digest,
 	   sizeof(struct cmac_aes128_ctx), ctx->s2vk, alength, adata,
-	   nlength, nonce, mlength-SIV_DIGEST_SIZE, dst, siv.b);
+	   nlength, nonce, mlength, dst, siv.b);
 
   return memeql_sec(siv.b, src, SIV_DIGEST_SIZE);
 }

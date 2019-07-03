@@ -130,7 +130,7 @@ typedef struct {
 
 typedef struct {
   uint32_t id;
-  struct siv_aes128_cmac_ctx siv;
+  struct siv_cmac_aes128_ctx siv;
 } ServerKey;
 
 union sockaddr_in46 {
@@ -937,7 +937,7 @@ generate_server_key(void)
   current_server_key = (current_server_key + 1) % MAX_SERVER_KEYS;
 
   UTI_GetRandomBytesUrandom(key, sizeof (key));
-  siv_aes128_cmac_set_key(&server_keys[current_server_key].siv, key);
+  siv_cmac_aes128_set_key(&server_keys[current_server_key].siv, key);
 
   UTI_GetRandomBytes(&server_keys[current_server_key].id,
                      sizeof (server_keys[current_server_key].id));
@@ -1207,9 +1207,9 @@ NKE_GenerateCookie(NKE_Key *c2s, NKE_Key *s2c, NKE_Cookie *nke_cookie)
   memcpy(plaintext + 32, s2c->key, 32);
 
   assert(sizeof (cookie->ciphertext) == sizeof (plaintext) + SIV_DIGEST_SIZE);
-  siv_aes128_cmac_encrypt_message(&key->siv, sizeof (cookie->nonce), cookie->nonce,
+  siv_cmac_aes128_encrypt_message(&key->siv, sizeof (cookie->nonce), cookie->nonce,
                                   0, NULL,
-                                  SIV_DIGEST_SIZE, sizeof (plaintext),
+                                  sizeof (plaintext) + SIV_DIGEST_SIZE,
                                   cookie->ciphertext, plaintext);
 
   return 1;
@@ -1238,9 +1238,8 @@ NKE_DecodeCookie(NKE_Cookie *nke_cookie, NKE_Key *c2s, NKE_Key *s2c)
   }
 
   assert(sizeof (plaintext) + SIV_DIGEST_SIZE == sizeof (cookie->ciphertext));
-  if (!siv_aes128_cmac_decrypt_message(&key->siv, sizeof (cookie->nonce), cookie->nonce,
-                                       0, NULL,
-                                       SIV_DIGEST_SIZE, sizeof (cookie->ciphertext),
+  if (!siv_cmac_aes128_decrypt_message(&key->siv, sizeof (cookie->nonce), cookie->nonce,
+                                       0, NULL, sizeof (cookie->ciphertext) - SIV_DIGEST_SIZE,
                                        (unsigned char *)&plaintext, cookie->ciphertext)) {
     DEBUG_LOG("SIV decrypt failed");
     return 0;

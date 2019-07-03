@@ -48,26 +48,24 @@
  */
 
 /* AES_SIV_CMAC_256 */
-struct siv_aes128_cmac_ctx {
+struct siv_cmac_aes128_ctx {
     struct aes128_ctx         cipher;
     uint8_t s2vk[AES128_KEY_SIZE];
 };
 
 void
-siv_aes128_cmac_set_key(struct siv_aes128_cmac_ctx *ctx, const uint8_t *key);
+siv_cmac_aes128_set_key(struct siv_cmac_aes128_ctx *ctx, const uint8_t *key);
 
 void
-siv_aes128_cmac_encrypt_message(struct siv_aes128_cmac_ctx *ctx,
+siv_cmac_aes128_encrypt_message(struct siv_cmac_aes128_ctx *ctx,
 				size_t nlength, const uint8_t *nonce,
 				size_t alength, const uint8_t *adata,
-				size_t tlength,
 				size_t clength, uint8_t *dst, const uint8_t *src);
 
 int
-siv_aes128_cmac_decrypt_message(struct siv_aes128_cmac_ctx *ctx,
+siv_cmac_aes128_decrypt_message(struct siv_cmac_aes128_ctx *ctx,
 				size_t nlength, const uint8_t *nonce,
 				size_t alength, const uint8_t *adata,
-				size_t tlength,
 				size_t mlength, uint8_t *dst, const uint8_t *src);
 
 #endif /* NETTLE_SIV_H_INCLUDED */
