@@ -932,10 +932,19 @@ if [ $feat_nts = "1" ] && [ $try_gnutls = "1" ]; then
     "$test_cflags" "$test_link" \
     'gnutls_init(NULL, 0);'
   then
-    EXTRA_OBJECTS="$EXTRA_OBJECTS nts_ntp.o nts_ke.o siv_cmac.o"
+    EXTRA_OBJECTS="$EXTRA_OBJECTS nts_ntp.o nts_ke.o"
     LIBS="$LIBS $test_link"
     MYCPPFLAGS="$MYCPPFLAGS $test_cflags"
     add_def FEAT_NTS
+
+    if test_code 'siv_cmac_aes128_set_key in nettle' \
+      'nettle/siv-cmac.h' "" "$LIBS" \
+      'siv_cmac_aes128_set_key(NULL, NULL);'
+    then
+      add_def HAVE_NETTLE_SIV_CMAC
+    else
+      EXTRA_OBJECTS="$EXTRA_OBJECTS siv_cmac.o"
+    fi
   fi
 fi
 

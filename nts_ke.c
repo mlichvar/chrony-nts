@@ -37,7 +37,11 @@
 #include "sched.h"
 #include "util.h"
 
+#ifdef HAVE_NETTLE_SIV_CMAC
+#include <nettle/siv-cmac.h>
+#else
 #include "siv_cmac.h"
+#endif
 
 #include <gnutls/gnutls.h>
 

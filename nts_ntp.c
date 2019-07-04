@@ -37,7 +37,11 @@
 
 #include "ntp_sources.h"
 
+#ifdef HAVE_NETTLE_SIV_CMAC
+#include <nettle/siv-cmac.h>
+#else
 #include "siv_cmac.h"
+#endif
 
 #define MAX_COOKIES 8
 #define NONCE_LENGTH 16
