@@ -501,6 +501,9 @@ SYS_Linux_EnableSystemCallFilter(int level)
     SCMP_SYS(send), SCMP_SYS(sendmmsg), SCMP_SYS(sendmsg), SCMP_SYS(sendto),
     /* TODO: check socketcall arguments */
     SCMP_SYS(socketcall),
+#ifdef FEAT_NTS
+    SCMP_SYS(accept), SCMP_SYS(shutdown),
+#endif
     /* General I/O */
     SCMP_SYS(_newselect), SCMP_SYS(close), SCMP_SYS(open), SCMP_SYS(openat), SCMP_SYS(pipe),
     SCMP_SYS(pipe2), SCMP_SYS(poll), SCMP_SYS(ppoll), SCMP_SYS(pselect6), SCMP_SYS(read),
