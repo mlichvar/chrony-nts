@@ -1195,7 +1195,7 @@ NKE_GenerateCookie(NKE_Key *c2s, NKE_Key *s2c, NKE_Cookie *nke_cookie)
 
   key = &server_keys[current_server_key];
 
-  assert(sizeof (nke_cookie->cookie) >= sizeof (cookie));
+  assert(sizeof (nke_cookie->cookie) >= sizeof (*cookie));
 
   nke_cookie->length = sizeof (*cookie);
 
